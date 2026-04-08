@@ -48,6 +48,21 @@ class ControlBodyBracingTransformer:
         self.apply = apply_fn
 
 
+class GotoFlowTransformer:
+    def __init__(self, apply_fn):
+        self.apply = apply_fn
+
+
+class ThrowFlowTransformer:
+    def __init__(self, apply_fn):
+        self.apply = apply_fn
+
+
+class CherryFlowTransformer:
+    def __init__(self, apply_fn):
+        self.apply = apply_fn
+
+
 class STLWrapperTransformer:
     def __init__(self, apply_fn):
         self.apply = apply_fn

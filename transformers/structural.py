@@ -425,10 +425,12 @@ def is_supported_for_flattening(body_text):
 
 
 def _extract_flatten_return_type(prefix, function_name):
-    name_index = prefix.rfind(function_name)
+    segment_start = max(prefix.rfind("\n"), prefix.rfind(";"), prefix.rfind("}")) + 1
+    candidate_prefix = prefix[segment_start:].strip()
+    name_index = candidate_prefix.rfind(function_name)
     if name_index == -1:
         return None
-    return_type = prefix[:name_index].strip()
+    return_type = candidate_prefix[:name_index].strip()
     if not return_type:
         return None
     tokens = return_type.split()
@@ -702,6 +704,8 @@ def apply_function_cloning(source_text):
         if re.search(r"\)\s*(?:const|noexcept|->|\[\[|requires)", signature_text):
             continue
         if re.search(rf"\b{re.escape(function_name)}\s*\(", function_info["body_text"]):
+            continue
+        if re.search(r"\bgoto\b", function_info["body_text"]):
             continue
 
         params_text = function_info["params_text"][:-1]

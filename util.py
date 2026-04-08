@@ -27,6 +27,7 @@ CPP_KEYWORDS = {
 FUNCTION_HEADER_SCAN_WINDOW = 300
 FUNCTION_LIKE_SKIP_NAMES = {"if", "for", "while", "switch", "catch"}
 VM_SKIP_MARKER = "/*__VM_SKIP__*/"
+CHERRY_SKIP_MARKER = "/*__CHERRY_SKIP__*/"
 
 def vlog(tag: str, message: str) -> None:
     """Verbose logger controlled by config.VERBOSE_LOGGING."""
@@ -241,6 +242,7 @@ def replace_keywords_with_macros(source_text, keyword_to_macro):
             result.append(char)
             if char == "*" and next_char == "/":
                 result.append(next_char)
+                in_block_comment = False
                 index += 2
             else:
                 index += 1
@@ -402,7 +404,7 @@ def looks_like_declaration(statement):
         "switch", "case", "default", "else", "do", "try", "catch", "asm",
         "__asm__", "static_assert",
     )
-    if stripped.startswith(forbidden_prefixes):
+    if re.match(rf"^(?:{'|'.join(re.escape(prefix) for prefix in forbidden_prefixes)})\b", stripped):
         return False
 
     head = stripped[:-1].strip()
@@ -542,9 +544,13 @@ def iter_function_definitions(source_text):
         line_start = source_text.rfind("\n", 0, brace_index) + 1
         base_indent = re.match(r"\s*", source_text[line_start:brace_index]).group(0)
         body_text = source_text[brace_index + 1:end_index - 1]
-        skip_structural = has_vm_skip_marker(source_text, line_start) or is_performance_sensitive_function(
+        skip_structural = (
+            has_vm_skip_marker(source_text, line_start)
+            or CHERRY_SKIP_MARKER in body_text[:512]
+            or is_performance_sensitive_function(
             metadata["header_text"],
             body_text,
+            )
         )
         yield {
             "brace_index": brace_index,

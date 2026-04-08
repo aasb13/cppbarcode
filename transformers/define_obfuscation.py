@@ -11,7 +11,7 @@ from util import (
 )
 
 
-DEFINE_OBFUSCATION_TOKENS = CPP_KEYWORDS | {"cout", "cin", "endl"}
+DEFINE_OBFUSCATION_TOKENS = (CPP_KEYWORDS - {"try", "catch", "throw"}) | {"cout", "cin", "endl"}
 
 
 def apply_define_obfuscation(source_text):
