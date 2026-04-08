@@ -29,6 +29,9 @@ OPAQUE_WRAPPER_VARIANT = None
 VM_NAMESPACE_NAME = None
 VM_RUNTIME_REQUIRED = False
 VM_EXPRESSION_WRAPPER_NAMES = set()
+FLOAT_CONSTANT_TABLE_NAME = None
+FLOAT_CONSTANT_HELPER_NAME = None
+FLOAT_CONSTANT_ENTRIES = []
 
 
 def init_runtime_obfuscation_names():
@@ -139,3 +142,11 @@ def init_virtual_machine_names():
     global VM_NAMESPACE_NAME
     if VM_NAMESPACE_NAME is None:
         VM_NAMESPACE_NAME = generate_barcode_name(18)
+
+
+def init_floating_constant_names():
+    global FLOAT_CONSTANT_TABLE_NAME, FLOAT_CONSTANT_HELPER_NAME
+    if FLOAT_CONSTANT_TABLE_NAME is None:
+        FLOAT_CONSTANT_TABLE_NAME = generate_barcode_name(18)
+    if FLOAT_CONSTANT_HELPER_NAME is None:
+        FLOAT_CONSTANT_HELPER_NAME = generate_barcode_name(18)

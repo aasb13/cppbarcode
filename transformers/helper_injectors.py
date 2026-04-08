@@ -91,6 +91,85 @@ def inject_runtime_obfuscation_helpers(source_text):
     return out
 
 
+def inject_floating_constant_helpers(source_text):
+    """Injects lookup-table helpers for floating constant rewrites."""
+    if not config.ENABLE_FLOATING_CONSTANT_ENCODING:
+        vlog("float_tbl", "disabled")
+        return source_text
+
+    if state.FLOAT_CONSTANT_TABLE_NAME is None or state.FLOAT_CONSTANT_HELPER_NAME is None:
+        vlog("float_tbl", "no floating helper names initialized; skip injection")
+        return source_text
+    if not state.FLOAT_CONSTANT_ENTRIES:
+        vlog("float_tbl", "no floating constants rewritten; skip injection")
+        return source_text
+
+    ticket_name = generate_barcode_name(18)
+    index_name = generate_barcode_name(18)
+    value_name = generate_barcode_name(18)
+    mix_name = generate_barcode_name(18)
+    shadow_name = generate_barcode_name(18)
+    state_name = generate_barcode_name(18)
+    table_entries = list(state.FLOAT_CONSTANT_ENTRIES)
+    decoy_count = random.randint(2, 4)
+    for _ in range(decoy_count):
+        decoy_value = round(random.uniform(0.03125, 1.9375), 12)
+        table_entries.append(
+            {
+                "ticket": random.randint(0x1000, 0x7FFFFFFF),
+                "value": decoy_value,
+            }
+        )
+    random.shuffle(table_entries)
+
+    rendered_entries = []
+    for entry in table_entries:
+        value_text = repr(float(entry["value"]))
+        transform_expr = random.choice(
+            [
+                f"std::log(std::exp({value_text}))",
+                f"std::pow({value_text}, 1.0)",
+                f"(({value_text} * 1.0) + 0.0)",
+            ]
+        )
+        rendered_entries.append(
+            f"        {{{entry['ticket']}U, {transform_expr}}},"
+        )
+
+    helper_block = "\n".join(
+        [
+            "#include <cmath>",
+            "namespace {",
+            f"volatile unsigned long long {state_name} = 0;",
+            f"struct {state.FLOAT_CONSTANT_TABLE_NAME}Entry {{ unsigned int ticket; double value; }};",
+            f"static const {state.FLOAT_CONSTANT_TABLE_NAME}Entry {state.FLOAT_CONSTANT_TABLE_NAME}[] = {{",
+            *rendered_entries,
+            "};",
+            f"__attribute__((noinline, noipa)) double {state.FLOAT_CONSTANT_HELPER_NAME}(unsigned int {ticket_name}) {{",
+            f"    unsigned long long {mix_name} = {state_name} ^ static_cast<unsigned long long>({ticket_name});",
+            f'    __asm__ __volatile__("" : "+r"({mix_name}) : : "memory");',
+            f"    for (unsigned int {index_name} = 0; {index_name} < sizeof({state.FLOAT_CONSTANT_TABLE_NAME}) / sizeof({state.FLOAT_CONSTANT_TABLE_NAME}[0]); ++{index_name}) {{",
+            f"        unsigned int {shadow_name} = {state.FLOAT_CONSTANT_TABLE_NAME}[{index_name}].ticket ^ static_cast<unsigned int>({mix_name} & 0U);",
+            f"        if ({shadow_name} == {ticket_name}) {{",
+            f"            double {value_name} = {state.FLOAT_CONSTANT_TABLE_NAME}[{index_name}].value;",
+            f'            __asm__ __volatile__("" : "+g"({value_name}) : "r"({mix_name}) : "memory");',
+            f"            return (({value_name} * 1.0) + 0.0) - 0.0;",
+            "        }",
+            "    }",
+            f"    return {state.FLOAT_CONSTANT_TABLE_NAME}[0].value;",
+            "}",
+            "}",
+            "",
+        ]
+    )
+
+    lines = source_text.splitlines(keepends=True)
+    insert_line_index = _find_insertion_line_index(lines)
+    out = "".join(lines[:insert_line_index]) + helper_block + "".join(lines[insert_line_index:])
+    vlog("float_tbl", f"injected entries={len(table_entries)}, bytes {len(source_text)} -> {len(out)}")
+    return out
+
+
 def inject_cfg_pollution_helpers(source_text):
     """Injects opaque selectors used by polluted CFG edges and clone dispatchers."""
     if not (config.ENABLE_CFG_POLLUTION or config.ENABLE_FUNCTION_CLONING):

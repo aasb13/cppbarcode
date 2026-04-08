@@ -43,6 +43,11 @@ class RuntimeHelperTransformer:
         self.apply = apply_fn
 
 
+class FloatingConstantHelperTransformer:
+    def __init__(self, apply_fn):
+        self.apply = apply_fn
+
+
 class ControlBodyBracingTransformer:
     def __init__(self, apply_fn):
         self.apply = apply_fn
@@ -59,6 +64,11 @@ class ThrowFlowTransformer:
 
 
 class CherryFlowTransformer:
+    def __init__(self, apply_fn):
+        self.apply = apply_fn
+
+
+class TemplateExplosionTransformer:
     def __init__(self, apply_fn):
         self.apply = apply_fn
 
@@ -84,6 +94,11 @@ class FunctionPointerIndirectionTransformer:
 
 
 class FunctionCloningTransformer:
+    def __init__(self, apply_fn):
+        self.apply = apply_fn
+
+
+class FunctionReorderingTransformer:
     def __init__(self, apply_fn):
         self.apply = apply_fn
 

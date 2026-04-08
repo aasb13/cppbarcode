@@ -12,6 +12,9 @@ import config
 INTEGER_LITERAL_RE = re.compile(
     r"^(?P<body>(?:0[xX][0-9a-fA-F']+)|(?:0[bB][01']+)|(?:0[0-7']*)|(?:[1-9][0-9']*|0))(?P<suffix>(?:[uU](?:ll|LL|l|L)?|(?:ll|LL|l|L)[uU]?|z[uU]?|[uU]z)?)$"
 )
+FLOAT_LITERAL_RE = re.compile(
+    r"^(?P<body>(?:(?:\d+\.\d*|\.\d+|\d+[eE][+-]?\d+|\d+\.\d*[eE][+-]?\d+|\.\d+[eE][+-]?\d+)))(?P<suffix>[fFlL]?)$"
+)
 IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*(?:::\w+)*(?:<[^;=(){}]+>)?")
 CPP_KEYWORDS = {
     "alignas", "alignof", "asm", "auto", "bool", "break", "case", "catch", "char",
@@ -95,6 +98,34 @@ def parse_integer_literal(value_str):
     }
 
 
+def parse_floating_literal(value_str):
+    """Returns parsed floating literal metadata for safe mutations."""
+    match = FLOAT_LITERAL_RE.fullmatch(value_str)
+    if not match:
+        return None
+
+    body = match.group("body")
+    suffix = match.group("suffix")
+    try:
+        value = float(body)
+    except ValueError:
+        return None
+
+    if suffix in {"f", "F"}:
+        cast_type = "float"
+    elif suffix in {"l", "L"}:
+        cast_type = "long double"
+    else:
+        cast_type = "double"
+
+    return {
+        "body": body,
+        "suffix": suffix,
+        "value": value,
+        "cast_type": cast_type,
+    }
+
+
 def format_literal(value, suffix):
     return f"{value}{suffix}"
 
@@ -144,6 +175,36 @@ def get_constant_mutation(value_str, runtime_wrapper=None):
         return runtime_wrapper(result)
 
     return result
+
+
+def get_floating_constant_mutation(value_str):
+    """Replaces floating literals with lookup-table based runtime helpers."""
+    literal = parse_floating_literal(value_str)
+    if literal is None or not getattr(config, "ENABLE_FLOATING_CONSTANT_ENCODING", False):
+        return value_str
+
+    import state
+
+    state.init_floating_constant_names()
+    for entry in state.FLOAT_CONSTANT_ENTRIES:
+        if entry["source"] == value_str:
+            ticket = entry["ticket"]
+            break
+    else:
+        ticket = random.randint(0x1000, 0x7FFFFFFF)
+        state.FLOAT_CONSTANT_ENTRIES.append(
+            {
+                "source": value_str,
+                "ticket": ticket,
+                "value": literal["value"],
+                "cast_type": literal["cast_type"],
+            }
+        )
+
+    helper_expr = f"{state.FLOAT_CONSTANT_HELPER_NAME}({format_literal(ticket, '')}U)"
+    if literal["cast_type"] == "double":
+        return helper_expr
+    return f"static_cast<{literal['cast_type']}>({helper_expr})"
 
 
 def strip_comments(source_text):
@@ -564,8 +625,14 @@ def iter_function_definitions(source_text):
 
 
 def has_vm_skip_marker(source_text, line_start):
-    window_start = max(0, line_start - 1024)
-    return VM_SKIP_MARKER in source_text[window_start:line_start]
+    marker_index = source_text.rfind(VM_SKIP_MARKER, 0, line_start)
+    if marker_index == -1:
+        return False
+    # The VM skip marker is emitted immediately ahead of the wrapped function
+    # signature. If a prior function already closed before this line, the marker
+    # belongs to that previous function and should not suppress new transforms.
+    closing_brace_index = source_text.find("}", marker_index, line_start)
+    return closing_brace_index == -1
 
 
 def is_performance_sensitive_function(header_text, body_text):

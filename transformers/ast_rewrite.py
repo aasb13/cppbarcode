@@ -12,6 +12,7 @@ from util import (
     apply_name_map_to_fragment,
     generate_barcode_name,
     get_constant_mutation,
+    get_floating_constant_mutation,
     is_local,
     is_escaped,
     parse_integer_literal,
@@ -97,6 +98,12 @@ def render_obfuscated_expression(cursor, source_text, name_map):
             and parse_integer_literal(spelling) is not None
         ):
             spelling = get_constant_mutation(spelling, runtime_wrapper=runtime_wrap_constant)
+        elif (
+            config.ENABLE_FLOATING_CONSTANT_ENCODING
+            and token.kind == clang.cindex.TokenKind.LITERAL
+            and parse_integer_literal(spelling) is None
+        ):
+            spelling = get_floating_constant_mutation(spelling)
         elif config.ENABLE_BOOLEAN_OBFUSCATION and spelling == "true":
             spelling = "(0x7 > 0x1)"
         elif config.ENABLE_BOOLEAN_OBFUSCATION and spelling == "false":

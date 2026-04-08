@@ -1185,7 +1185,11 @@ def _build_native_bridge(native_info, name_map):
 
 
 def _build_wrapper(function_cursor, source_text, name_map):
-    if function_cursor.spelling == "main" or not _is_function_signature_supported(function_cursor):
+    if (
+        function_cursor.spelling == "main"
+        or function_cursor.spelling in state.VM_EXPRESSION_WRAPPER_NAMES
+        or not _is_function_signature_supported(function_cursor)
+    ):
         return None
     body_cursor = _get_function_body_cursor(function_cursor)
     if body_cursor is None:

@@ -17,7 +17,9 @@ from transformers import (
     DeadCodeRemovalTransformer,
     DefineObfuscationTransformer,
     FunctionCloningTransformer,
+    FloatingConstantHelperTransformer,
     FunctionPointerIndirectionTransformer,
+    FunctionReorderingTransformer,
     GotoFlowTransformer,
     IncludeWrappingTransformer,
     MemoryAccessTransformer,
@@ -28,6 +30,7 @@ from transformers import (
     STLWrapperTransformer,
     StringLiteralEncryptionTransformer,
     StylometricNoiseTransformer,
+    TemplateExplosionTransformer,
     ThrowFlowTransformer,
     TMPAdditionTransformer,
     TypeLevelObfuscationTransformer,
@@ -40,12 +43,14 @@ from transformers.cherry_flow import apply_cherry_flow_obfuscation
 from transformers.define_obfuscation import apply_define_obfuscation
 from transformers.dead_code_removal import remove_dead_code
 from transformers.formatting import apply_stylometric_noise
+from transformers.function_reordering import apply_function_reordering
 from transformers.goto_flow import apply_goto_flow_obfuscation
 from transformers.helper_injectors import (
     inject_cfg_pollution_helpers,
     inject_data_flow_helpers,
     inject_dead_code_helpers,
     inject_function_pointer_helpers,
+    inject_floating_constant_helpers,
     inject_memory_access_helpers,
     inject_runtime_obfuscation_helpers,
     inject_stl_wrappers,
@@ -57,6 +62,7 @@ from transformers.include_wrapping import wrap_includes_with_preprocessor_logic
 from transformers.opaque_dead_code import inject_dead_code_blocks, inject_opaque_predicates
 from transformers.runtime import runtime_wrap_constant
 from transformers.throw_flow import apply_throw_flow_obfuscation
+from transformers.template_explosion import apply_template_explosion
 from transformers.structural import (
     apply_control_flow_flattening,
     apply_function_cloning,
@@ -73,6 +79,7 @@ from util import (
     build_name_map,
     build_protected_range_index,
     get_constant_mutation,
+    get_floating_constant_mutation,
     is_in_protected_range,
     normalize_path,
     parse_integer_literal,
@@ -87,18 +94,21 @@ if os.path.exists("/usr/lib/libclang.so"):
 INCLUDE_WRAPPING_TRANSFORMER = IncludeWrappingTransformer(wrap_includes_with_preprocessor_logic)
 DEFINE_OBFUSCATION_TRANSFORMER = DefineObfuscationTransformer(apply_define_obfuscation)
 FUNCTION_CLONING_TRANSFORMER = FunctionCloningTransformer(apply_function_cloning)
+FUNCTION_REORDERING_TRANSFORMER = FunctionReorderingTransformer(apply_function_reordering)
 STATEMENT_REORDERING_TRANSFORMER = StatementReorderingTransformer(apply_statement_reordering)
 LOOP_IDIOM_TRANSFORMER = LoopIdiomTransformer(apply_loop_idiom_transformation)
 GOTO_FLOW_TRANSFORMER = GotoFlowTransformer(apply_goto_flow_obfuscation)
 CONTROL_FLOW_FLATTENING_TRANSFORMER = ControlFlowFlatteningTransformer(apply_control_flow_flattening)
 THROW_FLOW_TRANSFORMER = ThrowFlowTransformer(apply_throw_flow_obfuscation)
 CHERRY_FLOW_TRANSFORMER = CherryFlowTransformer(apply_cherry_flow_obfuscation)
+TEMPLATE_EXPLOSION_TRANSFORMER = TemplateExplosionTransformer(apply_template_explosion)
 CFG_POLLUTION_TRANSFORMER = CFGPollutionTransformer(inject_cfg_pollution_helpers)
 OPAQUE_PREDICATE_TRANSFORMER = OpaquePredicateTransformer(inject_opaque_predicates)
 DEAD_CODE_BLOCK_TRANSFORMER = DeadCodeBlockTransformer(inject_dead_code_blocks)
 DEAD_CODE_REMOVAL_TRANSFORMER = DeadCodeRemovalTransformer(remove_dead_code)
 AST_REWRITE_TRANSFORMER = AstRewriteTransformer(collect_ast_replacements)
 RUNTIME_HELPER_TRANSFORMER = RuntimeHelperTransformer(inject_runtime_obfuscation_helpers)
+FLOATING_CONSTANT_HELPER_TRANSFORMER = FloatingConstantHelperTransformer(inject_floating_constant_helpers)
 CONTROL_BODY_BRACING_TRANSFORMER = ControlBodyBracingTransformer(expand_inline_control_bodies)
 MEMORY_ACCESS_TRANSFORMER = MemoryAccessTransformer(inject_memory_access_helpers)
 STL_WRAPPER_TRANSFORMER = STLWrapperTransformer(inject_stl_wrappers)
@@ -119,6 +129,9 @@ VIRTUAL_MACHINE_TRANSFORMER = VirtualMachineTransformer(
 def obfuscate_file(target_file):
     state.VM_RUNTIME_REQUIRED = False
     state.VM_EXPRESSION_WRAPPER_NAMES = set()
+    state.FLOAT_CONSTANT_TABLE_NAME = None
+    state.FLOAT_CONSTANT_HELPER_NAME = None
+    state.FLOAT_CONSTANT_ENTRIES = []
     with open(target_file, "r", encoding="utf-8") as f:
         original_content = f.read()
 
@@ -226,6 +239,14 @@ def obfuscate_file(target_file):
                 )
             )
         elif (
+            config.ENABLE_FLOATING_CONSTANT_ENCODING
+            and token.kind == clang.cindex.TokenKind.LITERAL
+            and parse_integer_literal(token.spelling) is None
+        ):
+            floating_replacement = get_floating_constant_mutation(token.spelling)
+            if floating_replacement != token.spelling:
+                replacements.append((token_start, token_end, floating_replacement))
+        elif (
             config.ENABLE_STRING_LITERAL_ENCRYPTION
             and token.kind == clang.cindex.TokenKind.LITERAL
             and token.spelling.startswith('"')
@@ -263,15 +284,18 @@ def obfuscate_file(target_file):
 
     final_content = "".join(content)
     final_content = LOOP_IDIOM_TRANSFORMER.apply(final_content)
+    final_content = FUNCTION_REORDERING_TRANSFORMER.apply(final_content)
     final_content = STATEMENT_REORDERING_TRANSFORMER.apply(final_content)
     final_content = CHERRY_FLOW_TRANSFORMER.apply(final_content)
     final_content = GOTO_FLOW_TRANSFORMER.apply(final_content)
     final_content = FUNCTION_CLONING_TRANSFORMER.apply(final_content)
     final_content = CONTROL_FLOW_FLATTENING_TRANSFORMER.apply(final_content)
     final_content = THROW_FLOW_TRANSFORMER.apply(final_content)
+    final_content = TEMPLATE_EXPLOSION_TRANSFORMER.apply(final_content)
     final_content = OPAQUE_PREDICATE_TRANSFORMER.apply(final_content)
     final_content = DEAD_CODE_BLOCK_TRANSFORMER.apply(final_content)
     final_content = RUNTIME_HELPER_TRANSFORMER.apply(final_content)
+    final_content = FLOATING_CONSTANT_HELPER_TRANSFORMER.apply(final_content)
     final_content = CFG_POLLUTION_TRANSFORMER.apply(final_content)
     final_content = MEMORY_ACCESS_TRANSFORMER.apply(final_content)
     final_content = STL_WRAPPER_TRANSFORMER.apply(final_content)
@@ -289,7 +313,7 @@ def obfuscate_file(target_file):
     formatting_safe = not state.VM_RUNTIME_REQUIRED
     if config.ENABLE_STYLOMETRIC_NOISE and formatting_safe:
         final_content = STYLOMETRIC_NOISE_TRANSFORMER.apply(final_content)
-    if formatting_safe:
+    if config.ENABLE_DEFINE_OBFUSCATION:
         final_content = DEFINE_OBFUSCATION_TRANSFORMER.apply(final_content)
     if config.ENABLE_WHITESPACE_DEGRADATION:
         final_content = WHITESPACE_DEGRADATION_TRANSFORMER.apply(final_content)

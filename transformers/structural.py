@@ -91,6 +91,8 @@ def build_reordered_statement_block(statements, base_indent):
     helper_names = [generate_barcode_name(18) for _ in statements]
     declaration_order = list(range(len(statements)))
     random.shuffle(declaration_order)
+    order_name = generate_barcode_name(18)
+    slot_name = generate_barcode_name(18)
     lines = [f"{inner_indent}{{"]
 
     for physical_index in declaration_order:
@@ -99,8 +101,19 @@ def build_reordered_statement_block(statements, base_indent):
         lines.extend(indent_block(statements[physical_index], f"{inner_indent}        "))
         lines.append(f"{inner_indent}    }};")
 
-    for helper_name in helper_names:
-        lines.append(f"{inner_indent}    {helper_name}();")
+    lines.append(
+        f"{inner_indent}    int {order_name}[{len(helper_names)}] = {{{', '.join(str(index) for index in range(len(helper_names)))}}};"
+    )
+    if len(helper_names) > 1:
+        lines.append(f"{inner_indent}    for (int {slot_name} = 0; {slot_name} < {len(helper_names)}; ++{slot_name}) {{")
+        for index, helper_name in enumerate(helper_names):
+            predicate_seed = random.randint(0x10, 0xFFFF)
+            lines.append(
+                f"{inner_indent}        if ((({order_name}[{slot_name}] ^ {index}) | (({predicate_seed} ^ {predicate_seed}) & {order_name}[{slot_name}])) == 0) {helper_name}();"
+            )
+        lines.append(f"{inner_indent}    }}")
+    else:
+        lines.append(f"{inner_indent}    {helper_names[0]}();")
 
     lines.append(f"{inner_indent}}}")
     return "\n".join(lines)
@@ -198,28 +211,42 @@ def build_loop_idiom_block(type_text, var_name, start_expr, bound_expr, body_tex
     span_name = generate_barcode_name(18)
     iter_name = generate_barcode_name(18)
     mapped_name = generate_barcode_name(18)
+    lane_name = generate_barcode_name(18)
+    base_iter_name = generate_barcode_name(18)
+    unroll_factor = random.randint(2, 3)
     lines = [
         f"{inner_indent}{{",
         f"{inner_indent}    auto {start_name} = ({start_expr});",
         f"{inner_indent}    auto {bound_name} = ({bound_expr});",
         f"{inner_indent}    if ({start_name} < {bound_name}) {{",
         f"{inner_indent}        auto {span_name} = {bound_name} - {start_name};",
-        f"{inner_indent}        decltype({span_name}) {iter_name} = {span_name};",
-        f"{inner_indent}        while ({iter_name}-- > 0) {{",
+        f"{inner_indent}        decltype({span_name}) {iter_name} = 0;",
+        f"{inner_indent}        while ({iter_name} < {span_name}) {{",
     ]
+    lines.append(f"{inner_indent}            auto {base_iter_name} = {iter_name};")
+    lines.append(f"{inner_indent}            for (int {lane_name} = 0; {lane_name} < {unroll_factor}; ++{lane_name}) {{")
+    lines.append(
+        f"{inner_indent}                if (({base_iter_name} + static_cast<decltype({span_name})>({lane_name})) >= {span_name}) {{"
+    )
+    lines.append(f"{inner_indent}                    break;")
+    lines.append(f"{inner_indent}                }}")
     if remap_index:
         salt_value = random.randint(1, 0xFF)
         lines.append(
-            f"{inner_indent}            auto {mapped_name} = {start_name} + ((({iter_name}) + static_cast<decltype({span_name})>({salt_value})) % {span_name});"
-        )
-        lines.append(
-            f"{inner_indent}            {type_text} {var_name} = static_cast<{type_text}>({mapped_name});"
+            f"{inner_indent}                auto {mapped_name} = {start_name} + ((({base_iter_name} + static_cast<decltype({span_name})>({lane_name})) + static_cast<decltype({span_name})>({salt_value})) % {span_name});"
         )
     else:
         lines.append(
-            f"{inner_indent}            {type_text} {var_name} = static_cast<{type_text}>({start_name} + (({span_name} - static_cast<decltype({span_name})>(1)) - {iter_name}));"
+            f"{inner_indent}                auto {mapped_name} = {start_name} + ({base_iter_name} + static_cast<decltype({span_name})>({lane_name}));"
         )
-    lines.extend(indent_block(body_text, f"{inner_indent}            "))
+    lines.append(
+        f"{inner_indent}                {type_text} {var_name} = static_cast<{type_text}>({mapped_name});"
+    )
+    lines.extend(indent_block(body_text, f"{inner_indent}                "))
+    lines.append(f"{inner_indent}            }}")
+    lines.append(
+        f"{inner_indent}            {iter_name} += static_cast<decltype({span_name})>({unroll_factor});"
+    )
     lines.append(f"{inner_indent}        }}")
     lines.append(f"{inner_indent}    }}")
     lines.append(f"{inner_indent}}}")
@@ -473,7 +500,9 @@ def flatten_function_body(body_text, base_indent, return_type=None):
     next_state_name = generate_barcode_name(18)
     jump_map_name = generate_barcode_name(18)
     fake_jump_map_name = generate_barcode_name(18)
+    resolver_type_name = generate_barcode_name(18)
     exit_label = generate_barcode_name(18)
+    guard_name = generate_barcode_name(18)
     indent = base_indent + "    "
     flattened_lines = []
     case_order = list(range(len(executable)))
@@ -493,57 +522,64 @@ def flatten_function_body(body_text, base_indent, return_type=None):
     for declaration in declarations:
         flattened_lines.extend(indent_block(declaration, indent))
 
+    flattened_lines.append(f"{indent}using {resolver_type_name} = int(*)(int);")
     flattened_lines.append(
-        f"{indent}int {jump_map_name}[{len(executable)}] = {{{', '.join(str(physical_labels[index]) for index in range(len(executable)))}}};"
+        f"{indent}{resolver_type_name} {jump_map_name}[{len(executable)}] = {{{', '.join(f'+[](int) -> int {{ return {physical_labels[index]}; }}' for index in range(len(executable)))}}};"
     )
     if cfg_enabled:
         flattened_lines.append(
-            f"{indent}int {fake_jump_map_name}[{len(executable)}] = {{{', '.join(str(fake_labels[index]) for index in range(len(executable)))}}};"
+            f"{indent}{resolver_type_name} {fake_jump_map_name}[{len(executable)}] = {{{', '.join(f'+[](int v) -> int {{ return (((v ^ v) == 0) ? {fake_labels[index]} : {physical_labels[index]}); }}' for index in range(len(executable)))}}};"
         )
+        flattened_lines.append(f"{indent}int {guard_name} = static_cast<int>((sizeof(int) ^ sizeof(int)) + 1);")
         flattened_lines.append(
-            f"{indent}int {state_name} = {state.CFG_EDGE_HELPER_NAME}({jump_map_name}[0], {fake_jump_map_name}[0], {random.randint(0x100, 0xFFFF)}ULL);"
+            f"{indent}int {state_name} = {state.CFG_EDGE_HELPER_NAME}({jump_map_name}[0]({guard_name}), {fake_jump_map_name}[0]({guard_name}), {random.randint(0x100, 0xFFFF)}ULL);"
         )
     else:
-        flattened_lines.append(f"{indent}int {state_name} = {jump_map_name}[0];")
+        flattened_lines.append(f"{indent}int {guard_name} = static_cast<int>((sizeof(int) ^ sizeof(int)) + 1);")
+        flattened_lines.append(f"{indent}int {state_name} = {jump_map_name}[0]({guard_name});")
     flattened_lines.append(f"{indent}while (true) {{")
-    flattened_lines.append(f"{indent}    switch ({state_name}) {{")
+    flattened_lines.append(f"{indent}    if ((({guard_name} ^ {guard_name}) == 0) && ((sizeof(int) > 0) || ({guard_name} == 0))) {{")
+    flattened_lines.append(f"{indent}        switch ({state_name}) {{")
 
     for index, statement in enumerate(executable):
-        flattened_lines.append(f"{indent}    case {physical_labels[index]}: {{")
-        flattened_lines.extend(indent_block(statement, f"{indent}        "))
+        flattened_lines.append(f"{indent}        case {physical_labels[index]}: {{")
+        flattened_lines.extend(indent_block(statement, f"{indent}            "))
 
         terminal = statement.lstrip().startswith(("return", "throw"))
         if not terminal:
             if index + 1 < len(executable):
-                flattened_lines.append(f"{indent}        int {next_state_name} = {index + 1};")
+                flattened_lines.append(f"{indent}            int {next_state_name} = {index + 1};")
                 if cfg_enabled:
                     flattened_lines.append(
-                        f"{indent}        {state_name} = {state.CFG_EDGE_HELPER_NAME}({jump_map_name}[{next_state_name}], {fake_jump_map_name}[{next_state_name}], {random.randint(0x100, 0xFFFF)}ULL);"
+                        f"{indent}            {state_name} = {state.CFG_EDGE_HELPER_NAME}({jump_map_name}[{next_state_name}]({guard_name}), {fake_jump_map_name}[{next_state_name}]({guard_name}), {random.randint(0x100, 0xFFFF)}ULL);"
                     )
                 else:
-                    flattened_lines.append(f"{indent}        {state_name} = {jump_map_name}[{next_state_name}];")
-                flattened_lines.append(f"{indent}        break;")
+                    flattened_lines.append(f"{indent}            {state_name} = {jump_map_name}[{next_state_name}]({guard_name});")
+                flattened_lines.append(f"{indent}            break;")
             else:
-                flattened_lines.append(f"{indent}        goto {exit_label};")
+                flattened_lines.append(f"{indent}            goto {exit_label};")
 
-        flattened_lines.append(f"{indent}    }}")
+        flattened_lines.append(f"{indent}        }}")
 
         if cfg_enabled:
-            flattened_lines.append(f"{indent}    case {fake_labels[index]}: {{")
+            flattened_lines.append(f"{indent}        case {fake_labels[index]}: {{")
             flattened_lines.append(
-                f"{indent}        volatile int {generate_barcode_name(18)} = {random.randint(0x10, 0xFF)};"
+                f"{indent}            volatile int {generate_barcode_name(18)} = {random.randint(0x10, 0xFF)};"
             )
             if not terminal and index + 1 < len(executable):
-                flattened_lines.append(f"{indent}        int {next_state_name} = {index + 1};")
+                flattened_lines.append(f"{indent}            int {next_state_name} = {index + 1};")
                 flattened_lines.append(
-                    f"{indent}        {state_name} = {state.CFG_EDGE_HELPER_NAME}({jump_map_name}[{next_state_name}], {fake_jump_map_name}[{next_state_name}], {random.randint(0x100, 0xFFFF)}ULL);"
+                    f"{indent}            {state_name} = {state.CFG_EDGE_HELPER_NAME}({jump_map_name}[{next_state_name}]({guard_name}), {fake_jump_map_name}[{next_state_name}]({guard_name}), {random.randint(0x100, 0xFFFF)}ULL);"
                 )
-                flattened_lines.append(f"{indent}        break;")
+                flattened_lines.append(f"{indent}            break;")
             else:
-                flattened_lines.append(f"{indent}        goto {exit_label};")
-            flattened_lines.append(f"{indent}    }}")
+                flattened_lines.append(f"{indent}            goto {exit_label};")
+            flattened_lines.append(f"{indent}        }}")
 
-    flattened_lines.append(f"{indent}    default: goto {exit_label};")
+    flattened_lines.append(f"{indent}        default: goto {exit_label};")
+    flattened_lines.append(f"{indent}        }}")
+    flattened_lines.append(f"{indent}    }} else {{")
+    flattened_lines.append(f"{indent}        goto {exit_label};")
     flattened_lines.append(f"{indent}    }}")
     flattened_lines.append(f"{indent}}}")
     flattened_lines.append(f"{indent}{exit_label}:")
