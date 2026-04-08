@@ -90,6 +90,7 @@ def init_data_flow_names():
             "mask_a": random.randint(0x10, 0xFFFF),
             "mask_b": random.randint(0x10, 0xFFFF),
             "merge_mode": random.choice(("direct", "restaged")),
+            "unpack_mode": random.choice(("plain", "volatile_noise", "mask_fold")),
         }
 
 
@@ -109,6 +110,8 @@ def init_type_level_names():
         OPAQUE_WRAPPER_VARIANT = {
             "key_a": random.randint(0x10, 0xFFFF),
             "key_b": random.randint(0x10, 0xFFFF),
+            "encode_mode": random.choice(("xor_add", "add_xor", "xor_sub")),
+            "compare_mode": random.choice(("direct", "common_type")),
         }
 
 
@@ -126,11 +129,9 @@ def init_tmp_addition_names():
         TMP_ADD_HELPER_NAME = generate_barcode_name(18)
     if TMP_ADD_VARIANT is None:
         TMP_ADD_VARIANT = {
-            "depth": random.randint(4, 8),
-            "split_mode": random.choice(("half", "biased_left", "biased_right")),
-            "base_mode": random.choice(("plain", "commuted", "neg_sub", "double_neg")),
-            "call_mode": random.choice(("direct", "swap", "lift_left", "lift_right")),
-            "helper_mode": random.choice(("value_sfinae", "type_sfinae")),
+            "engine_mode": random.choice(("recursive", "index_sequence")),
+            "carry_mode": random.choice(("majority", "xor_mix")),
+            "entry_mode": random.choice(("direct", "swap", "zero_left", "zero_right")),
         }
 
 

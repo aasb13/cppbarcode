@@ -2,7 +2,7 @@ import random
 import re
 
 import config
-from util import generate_barcode_name, has_vm_skip_marker, vlog
+from util import find_matching_brace, generate_barcode_name, has_vm_skip_marker, is_performance_sensitive_function, vlog
 
 
 def inject_opaque_predicates(source_text):
@@ -45,6 +45,12 @@ def inject_opaque_predicates(source_text):
         if has_vm_skip_marker(source_text, line_start):
             scan_index = brace_index + 1
             continue
+        function_end = find_matching_brace(source_text, brace_index)
+        if function_end is not None:
+            body_text = source_text[brace_index + 1 : function_end - 1]
+            if is_performance_sensitive_function(stripped_header, body_text):
+                scan_index = brace_index + 1
+                continue
         base_indent = re.match(r"\s*", source_text[line_start:brace_index]).group(0)
         inner_indent = base_indent + "    "
         dead_name = generate_barcode_name(18)
@@ -53,7 +59,7 @@ def inject_opaque_predicates(source_text):
         payload_name = generate_barcode_name(18)
         payload_value = random.randint(0x10, 0xFFFF)
         mask_value = random.randint(0x10, 0xFF)
-        opaque_block = "\n".join(
+        opaque_variants = [
             [
                 "",
                 f"{inner_indent}volatile int {dead_name} = 0;",
@@ -66,8 +72,22 @@ def inject_opaque_predicates(source_text):
                 f"{inner_indent}    int {payload_name} = {payload_value};",
                 f"{inner_indent}    {payload_name} ^= {payload_value};",
                 f"{inner_indent}}}",
-            ]
-        )
+            ],
+            [
+                "",
+                f"{inner_indent}volatile int {dead_name} = 0;",
+                f"{inner_indent}unsigned long long {noise_name} = (static_cast<unsigned long long>({payload_value}) + static_cast<unsigned long long>(reinterpret_cast<unsigned long long>(&{dead_name}))) ^ {mask_value}ULL;",
+                f"{inner_indent}int {shadow_state_name} = static_cast<int>(({noise_name} ^ {noise_name}) & {mask_value});",
+                f"{inner_indent}if (((sizeof(long long) ^ sizeof(long long)) != 0) && ({shadow_state_name} == {mask_value})) {{",
+                f"{inner_indent}    {dead_name} += {shadow_state_name};",
+                f"{inner_indent}}}",
+                f"{inner_indent}if (({dead_name} & ({mask_value} ^ {mask_value})) != 0) {{",
+                f"{inner_indent}    int {payload_name} = {payload_value};",
+                f"{inner_indent}    {payload_name} -= {payload_value};",
+                f"{inner_indent}}}",
+            ],
+        ]
+        opaque_block = "\n".join(random.choice(opaque_variants))
 
         result.append(source_text[last_index : brace_index + 1])
         result.append(opaque_block)
@@ -121,6 +141,12 @@ def inject_dead_code_blocks(source_text):
         if has_vm_skip_marker(source_text, line_start):
             scan_index = brace_index + 1
             continue
+        function_end = find_matching_brace(source_text, brace_index)
+        if function_end is not None:
+            body_text = source_text[brace_index + 1 : function_end - 1]
+            if is_performance_sensitive_function(stripped_header, body_text):
+                scan_index = brace_index + 1
+                continue
         base_indent = re.match(r"\s*", source_text[line_start:brace_index]).group(0)
         inner_indent = base_indent + "    "
         guard_name = generate_barcode_name(18)
@@ -129,7 +155,7 @@ def inject_dead_code_blocks(source_text):
         sink_name = generate_barcode_name(18)
         seed = random.randint(0x10, 0xFFFF)
         mask = random.randint(0x10, 0xFF)
-        dead_block = "\n".join(
+        dead_variants = [
             [
                 "",
                 f"{inner_indent}volatile int {guard_name} = 0;",
@@ -147,8 +173,22 @@ def inject_dead_code_blocks(source_text):
                 f"{inner_indent}        }}",
                 f"{inner_indent}    }}",
                 f"{inner_indent}}}",
-            ]
-        )
+            ],
+            [
+                "",
+                f"{inner_indent}volatile int {guard_name} = 0;",
+                f"{inner_indent}unsigned long long {noise_name} = static_cast<unsigned long long>({seed}) + static_cast<unsigned long long>(reinterpret_cast<unsigned long long>(&{guard_name}));",
+                f"{inner_indent}int {fake_branch_name} = static_cast<int>(({noise_name} ^ {noise_name}) | ({mask} & 0));",
+                f"{inner_indent}if ({guard_name} != 0) {{",
+                f"{inner_indent}    int {sink_name} = {seed};",
+                f"{inner_indent}    do {{",
+                f"{inner_indent}        {sink_name} ^= {mask};",
+                f"{inner_indent}        {sink_name} -= {mask};",
+                f"{inner_indent}    }} while ({sink_name} < 0);",
+                f"{inner_indent}}}",
+            ],
+        ]
+        dead_block = "\n".join(random.choice(dead_variants))
 
         result.append(source_text[last_index : brace_index + 1])
         result.append(dead_block)

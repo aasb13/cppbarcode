@@ -541,11 +541,15 @@ def iter_function_definitions(source_text):
 
         line_start = source_text.rfind("\n", 0, brace_index) + 1
         base_indent = re.match(r"\s*", source_text[line_start:brace_index]).group(0)
-        skip_structural = has_vm_skip_marker(source_text, line_start)
+        body_text = source_text[brace_index + 1:end_index - 1]
+        skip_structural = has_vm_skip_marker(source_text, line_start) or is_performance_sensitive_function(
+            metadata["header_text"],
+            body_text,
+        )
         yield {
             "brace_index": brace_index,
             "end_index": end_index,
-            "body_text": source_text[brace_index + 1:end_index - 1],
+            "body_text": body_text,
             "base_indent": base_indent,
             "skip_structural": skip_structural,
             **metadata,
@@ -556,6 +560,31 @@ def iter_function_definitions(source_text):
 def has_vm_skip_marker(source_text, line_start):
     window_start = max(0, line_start - 1024)
     return VM_SKIP_MARKER in source_text[window_start:line_start]
+
+
+def is_performance_sensitive_function(header_text, body_text):
+    combined = f"{header_text}\n{body_text}"
+    stl_search_tokens = (
+        "upper_bound(",
+        "lower_bound(",
+        "binary_search(",
+        "equal_range(",
+        "std::upper_bound(",
+        "std::lower_bound(",
+        "std::binary_search(",
+        "std::equal_range(",
+    )
+    if any(token in combined for token in stl_search_tokens):
+        return True
+
+    # Passing STL containers by value is already expensive; avoid piling on
+    # structural transforms that amplify the cost in query-heavy code.
+    container_by_value_patterns = (
+        r"\b(?:std::)?vector\s*<[^>]+>\s+[A-Za-z_]\w*",
+        r"\b(?:std::)?deque\s*<[^>]+>\s+[A-Za-z_]\w*",
+        r"\b(?:std::)?string\s+[A-Za-z_]\w*",
+    )
+    return any(re.search(pattern, header_text) for pattern in container_by_value_patterns)
 
 
 def find_vm_protected_regions(source_text):

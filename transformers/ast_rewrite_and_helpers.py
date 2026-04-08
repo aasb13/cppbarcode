@@ -230,14 +230,27 @@ def get_function_pointer_call_replacement(node, source_text: str, name_map: dict
     if not callee_text or "::" in callee_text:
         return None
 
+    referenced = callee.referenced
+    if referenced is None or referenced.kind != clang.cindex.CursorKind.FUNCTION_DECL:
+        return None
+    param_types = [
+        child.type.get_canonical().spelling
+        for child in referenced.get_children()
+        if child.kind == clang.cindex.CursorKind.PARM_DECL
+    ]
+    fn_pointer_type = (
+        f"static_cast<{referenced.result_type.get_canonical().spelling} (*)({', '.join(param_types) if param_types else 'void'})>(&{{}})"
+    )
+
     state.init_function_pointer_helper_names()
     callee_name = name_map.get(callee_text, callee_text)
     arg_exprs = [render_recursive_expression(child, source_text, name_map, depth + 1) for child in children[1:]]
-    staged_pointer = f"{state.FUNCTION_PTR_STAGE_HELPER_NAME}(&{callee_name})"
+    resolved_pointer = fn_pointer_type.format(callee_name)
+    staged_pointer = f"{state.FUNCTION_PTR_STAGE_HELPER_NAME}({resolved_pointer})"
     call_variants = [
         f"{state.FUNCTION_PTR_INVOKE_HELPER_NAME}({staged_pointer}{', ' if arg_exprs else ''}{', '.join(arg_exprs)})",
         f"{state.FUNCTION_PTR_INVOKE_HELPER_NAME}(({staged_pointer}){', ' if arg_exprs else ''}{', '.join(arg_exprs)})",
-        f"{state.FUNCTION_PTR_INVOKE_HELPER_NAME}({state.FUNCTION_PTR_STAGE_HELPER_NAME}({state.FUNCTION_PTR_STAGE_HELPER_NAME}(&{callee_name})){', ' if arg_exprs else ''}{', '.join(arg_exprs)})",
+        f"{state.FUNCTION_PTR_INVOKE_HELPER_NAME}({state.FUNCTION_PTR_STAGE_HELPER_NAME}({state.FUNCTION_PTR_STAGE_HELPER_NAME}({resolved_pointer})){', ' if arg_exprs else ''}{', '.join(arg_exprs)})",
     ]
     return random.choice(call_variants)
 
@@ -692,6 +705,8 @@ def inject_type_level_helpers(source_text: str) -> str:
     variant = state.OPAQUE_WRAPPER_VARIANT or {"key_a": 0x55, "key_b": 0x33}
     value_name = generate_barcode_name(18)
     storage_name = generate_barcode_name(18)
+    key_a_name = generate_barcode_name(18)
+    key_b_name = generate_barcode_name(18)
     key_a = variant["key_a"]
     key_b = variant["key_b"]
     rhs_name = generate_barcode_name(18)
@@ -703,9 +718,11 @@ def inject_type_level_helpers(source_text: str) -> str:
             f"template <typename T> struct {state.OPAQUE_WRAPPER_NAME} {{",
             f"    T {storage_name}{{}};",
             f"    constexpr {state.OPAQUE_WRAPPER_NAME}() = default;",
-            f"    constexpr explicit {state.OPAQUE_WRAPPER_NAME}(T {value_name}) : {storage_name}(encode({value_name})) {{}}",
-            f"    static constexpr T encode(T value) {{ return static_cast<T>((static_cast<unsigned long long>(value) ^ {key_a}) + {key_b}); }}",
-            f"    static constexpr T decode(T value) {{ return static_cast<T>((static_cast<unsigned long long>(value) - {key_b}) ^ {key_a}); }}",
+            f"    constexpr {state.OPAQUE_WRAPPER_NAME}(T {value_name}) : {storage_name}(encode({value_name})) {{}}",
+            f"    static constexpr T {key_a_name} = static_cast<T>({key_a});",
+            f"    static constexpr T {key_b_name} = static_cast<T>({key_b});",
+            f"    static constexpr T encode(T value) {{ return static_cast<T>((static_cast<unsigned long long>(value) ^ {key_a_name}) + {key_b_name}); }}",
+            f"    static constexpr T decode(T value) {{ return static_cast<T>((static_cast<unsigned long long>(value) - {key_b_name}) ^ {key_a_name}); }}",
             f"    constexpr T value() const {{ return decode({storage_name}); }}",
             "    constexpr operator T() const { return value(); }",
             f"    {state.OPAQUE_WRAPPER_NAME}& operator=(T {value_name}) {{ {storage_name} = encode({value_name}); return *this; }}",

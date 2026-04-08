@@ -32,6 +32,7 @@ def inject_runtime_obfuscation_helpers(source_text):
     value_name = generate_barcode_name(18)
     mask_name = generate_barcode_name(18)
     shadow_name = generate_barcode_name(18)
+    mix_name = generate_barcode_name(18)
     helper_variants = [
         "\n".join(
             [
@@ -55,6 +56,21 @@ def inject_runtime_obfuscation_helpers(source_text):
                 f"    T {shadow_name} = {value_name};",
                 f'    __asm__ __volatile__("" : "+r"({shadow_name}) : "r"({mask_name}) : "memory");',
                 f"    return static_cast<T>({shadow_name});",
+                "}",
+                "}",
+                "",
+            ]
+        ),
+        "\n".join(
+            [
+                "namespace {",
+                f"volatile unsigned long long {state.RUNTIME_OBF_STATE_NAME} = 0;",
+                f"template <typename T> __attribute__((noinline, noipa)) T {state.RUNTIME_OBF_HELPER_NAME}(T {value_name}) {{",
+                f"    unsigned long long {mask_name} = {state.RUNTIME_OBF_STATE_NAME};",
+                f"    unsigned long long {mix_name} = ({mask_name} << 1) ^ ({mask_name} >> 1);",
+                f"    T {shadow_name} = static_cast<T>({value_name});",
+                f'    __asm__ __volatile__("" : "+r"({shadow_name}) : "r"({mix_name}) : "memory");',
+                f"    return static_cast<T>(({shadow_name} ^ static_cast<T>(0)) + static_cast<T>(0));",
                 "}",
                 "}",
                 "",
@@ -88,24 +104,66 @@ def inject_cfg_pollution_helpers(source_text):
     salt_name = generate_barcode_name(18)
     upper_name = generate_barcode_name(18)
     state_name = generate_barcode_name(18)
-    helper_block = "\n".join(
-        [
-            "namespace {",
-            f"volatile unsigned long long {state_name} = 0;",
-            f"__attribute__((noinline, noipa)) int {state.CFG_EDGE_HELPER_NAME}(int {real_name}, int {fake_name}, unsigned long long {salt_name}) {{",
-            f"    unsigned long long {shadow_name} = {state_name} ^ {salt_name};",
-            f'    __asm__ __volatile__("" : "+r"({shadow_name}) : : "memory");',
-            f"    return ((({shadow_name} * 0ULL) + 1ULL) == 1ULL) ? {real_name} : {fake_name};",
-            "}",
-            f"__attribute__((noinline, noipa)) int {state.CFG_CLONE_SELECT_HELPER_NAME}(int {upper_name}, unsigned long long {salt_name}) {{",
-            f"    unsigned long long {shadow_name} = {state_name} + {salt_name};",
-            f'    __asm__ __volatile__("" : "+r"({shadow_name}) : : "memory");',
-            f"    return static_cast<int>(({shadow_name} * 0ULL) % static_cast<unsigned long long>({upper_name} > 0 ? {upper_name} : 1));",
-            "}",
-            "}",
-            "",
-        ]
-    )
+    mix_name = generate_barcode_name(18)
+    helper_variants = [
+        "\n".join(
+            [
+                "namespace {",
+                f"volatile unsigned long long {state_name} = 0;",
+                f"__attribute__((noinline, noipa)) int {state.CFG_EDGE_HELPER_NAME}(int {real_name}, int {fake_name}, unsigned long long {salt_name}) {{",
+                f"    unsigned long long {shadow_name} = {state_name} ^ {salt_name};",
+                f'    __asm__ __volatile__("" : "+r"({shadow_name}) : : "memory");',
+                f"    return ((({shadow_name} * 0ULL) + 1ULL) == 1ULL) ? {real_name} : {fake_name};",
+                "}",
+                f"__attribute__((noinline, noipa)) int {state.CFG_CLONE_SELECT_HELPER_NAME}(int {upper_name}, unsigned long long {salt_name}) {{",
+                f"    unsigned long long {shadow_name} = {state_name} + {salt_name};",
+                f'    __asm__ __volatile__("" : "+r"({shadow_name}) : : "memory");',
+                f"    return static_cast<int>(({shadow_name} * 0ULL) % static_cast<unsigned long long>({upper_name} > 0 ? {upper_name} : 1));",
+                "}",
+                "}",
+                "",
+            ]
+        ),
+        "\n".join(
+            [
+                "namespace {",
+                f"volatile unsigned long long {state_name} = 0;",
+                f"__attribute__((noinline, noipa)) int {state.CFG_EDGE_HELPER_NAME}(int {real_name}, int {fake_name}, unsigned long long {salt_name}) {{",
+                f"    unsigned long long {shadow_name} = ({state_name} + {salt_name}) ^ ({salt_name} >> 1);",
+                f'    __asm__ __volatile__("" : "+r"({shadow_name}) : : "memory");',
+                f"    int {mix_name} = static_cast<int>((({shadow_name} & 1ULL) ^ ({shadow_name} & 1ULL)));",
+                f"    return ({mix_name} == 0) ? {real_name} : {fake_name};",
+                "}",
+                f"__attribute__((noinline, noipa)) int {state.CFG_CLONE_SELECT_HELPER_NAME}(int {upper_name}, unsigned long long {salt_name}) {{",
+                f"    unsigned long long {shadow_name} = ({state_name} ^ {salt_name}) + ({salt_name} & 7ULL);",
+                f'    __asm__ __volatile__("" : "+r"({shadow_name}) : : "memory");',
+                f"    unsigned long long {mix_name} = ({shadow_name} ^ {shadow_name}) + {shadow_name};",
+                f"    return static_cast<int>(({mix_name} * 0ULL) % static_cast<unsigned long long>({upper_name} > 0 ? {upper_name} : 1));",
+                "}",
+                "}",
+                "",
+            ]
+        ),
+        "\n".join(
+            [
+                "namespace {",
+                f"volatile unsigned long long {state_name} = 0;",
+                f"__attribute__((noinline, noipa)) int {state.CFG_EDGE_HELPER_NAME}(int {real_name}, int {fake_name}, unsigned long long {salt_name}) {{",
+                f"    unsigned long long {shadow_name} = {state_name} + ({salt_name} ^ 0x5A5AULL);",
+                f'    __asm__ __volatile__("" : "+r"({shadow_name}) : : "memory");',
+                f"    return static_cast<int>(((({shadow_name} ^ {shadow_name}) + 1ULL) != 0ULL) ? {real_name} : {fake_name});",
+                "}",
+                f"__attribute__((noinline, noipa)) int {state.CFG_CLONE_SELECT_HELPER_NAME}(int {upper_name}, unsigned long long {salt_name}) {{",
+                f"    unsigned long long {shadow_name} = ({state_name} | 1ULL) ^ {salt_name};",
+                f'    __asm__ __volatile__("" : "+r"({shadow_name}) : : "memory");',
+                f"    return static_cast<int>(({shadow_name} & 0ULL) % static_cast<unsigned long long>({upper_name} > 0 ? {upper_name} : 1));",
+                "}",
+                "}",
+                "",
+            ]
+        ),
+    ]
+    helper_block = random.choice(helper_variants)
 
     lines = source_text.splitlines(keepends=True)
     insert_line_index = _find_insertion_line_index(lines)
@@ -133,28 +191,80 @@ def inject_memory_access_helpers(source_text):
     index_name = generate_barcode_name(18)
     shadow_name = generate_barcode_name(18)
     ptr_name = generate_barcode_name(18)
-    helper_block = "\n".join(
-        [
-            "#include <type_traits>",
-            "namespace {",
-            f"template <typename T, typename = std::enable_if_t<std::is_integral_v<T>>> __attribute__((noinline, noipa)) T {state.MEMORY_INDEX_HELPER_NAME}(T {index_name}) {{",
-            f"    T {shadow_name} = {index_name};",
-            f'    __asm__ __volatile__("" : "+r"({shadow_name}) : : "memory");',
-            f"    return static_cast<T>(({shadow_name} ^ static_cast<T>(0)) + (static_cast<T>(0) & {shadow_name}));",
-            "}",
-            f"template <typename T, typename I> __attribute__((noinline, noipa)) auto {state.MEMORY_PTR_ADVANCE_HELPER_NAME}(T* {ptr_name}, I {index_name}) -> T* {{",
-            f"    auto {shadow_name} = {state.MEMORY_INDEX_HELPER_NAME}(static_cast<I>({index_name}));",
-            f'    __asm__ __volatile__("" : "+r"({ptr_name}) : "g"({shadow_name}) : "memory");',
-            f"    return {ptr_name} + ({shadow_name} - static_cast<I>(0) + static_cast<I>(0));",
-            "}",
-            f"template <typename T> __attribute__((noinline, noipa)) T* {state.MEMORY_MEMBER_HELPER_NAME}(T* {ptr_name}) {{",
-            f'    __asm__ __volatile__("" : "+r"({ptr_name}) : : "memory");',
-            f"    return {ptr_name};",
-            "}",
-            "}",
-            "",
-        ]
-    )
+    mix_name = generate_barcode_name(18)
+    helper_variants = [
+        "\n".join(
+            [
+                "#include <type_traits>",
+                "namespace {",
+                f"template <typename T, typename = std::enable_if_t<std::is_integral_v<T>>> __attribute__((noinline, noipa)) T {state.MEMORY_INDEX_HELPER_NAME}(T {index_name}) {{",
+                f"    T {shadow_name} = {index_name};",
+                f'    __asm__ __volatile__("" : "+r"({shadow_name}) : : "memory");',
+                f"    return static_cast<T>(({shadow_name} ^ static_cast<T>(0)) + (static_cast<T>(0) & {shadow_name}));",
+                "}",
+                f"template <typename T, typename I> __attribute__((noinline, noipa)) auto {state.MEMORY_PTR_ADVANCE_HELPER_NAME}(T* {ptr_name}, I {index_name}) -> T* {{",
+                f"    auto {shadow_name} = {state.MEMORY_INDEX_HELPER_NAME}(static_cast<I>({index_name}));",
+                f'    __asm__ __volatile__("" : "+r"({ptr_name}) : "g"({shadow_name}) : "memory");',
+                f"    return {ptr_name} + ({shadow_name} - static_cast<I>(0) + static_cast<I>(0));",
+                "}",
+                f"template <typename T> __attribute__((noinline, noipa)) T* {state.MEMORY_MEMBER_HELPER_NAME}(T* {ptr_name}) {{",
+                f'    __asm__ __volatile__("" : "+r"({ptr_name}) : : "memory");',
+                f"    return {ptr_name};",
+                "}",
+                "}",
+                "",
+            ]
+        ),
+        "\n".join(
+            [
+                "#include <type_traits>",
+                "namespace {",
+                f"template <typename T, typename = std::enable_if_t<std::is_integral_v<T>>> __attribute__((noinline, noipa)) T {state.MEMORY_INDEX_HELPER_NAME}(T {index_name}) {{",
+                f"    T {shadow_name} = static_cast<T>({index_name} + static_cast<T>(0));",
+                f'    __asm__ __volatile__("" : "+r"({shadow_name}) : : "memory");',
+                f"    T {mix_name} = static_cast<T>(({shadow_name} | static_cast<T>(0)) - static_cast<T>(0));",
+                f"    return {mix_name};",
+                "}",
+                f"template <typename T, typename I> __attribute__((noinline, noipa)) auto {state.MEMORY_PTR_ADVANCE_HELPER_NAME}(T* {ptr_name}, I {index_name}) -> T* {{",
+                f"    I {shadow_name} = {state.MEMORY_INDEX_HELPER_NAME}(static_cast<I>({index_name}));",
+                f"    auto {mix_name} = ({shadow_name} ^ static_cast<I>(0));",
+                f'    __asm__ __volatile__("" : "+r"({ptr_name}) : "g"({mix_name}) : "memory");',
+                f"    return &{ptr_name}[{mix_name}];",
+                "}",
+                f"template <typename T> __attribute__((noinline, noipa)) T* {state.MEMORY_MEMBER_HELPER_NAME}(T* {ptr_name}) {{",
+                f"    auto {shadow_name} = reinterpret_cast<unsigned long long>({ptr_name});",
+                f'    __asm__ __volatile__("" : "+r"({shadow_name}) : : "memory");',
+                f"    return reinterpret_cast<T*>({shadow_name});",
+                "}",
+                "}",
+                "",
+            ]
+        ),
+        "\n".join(
+            [
+                "#include <type_traits>",
+                "namespace {",
+                f"template <typename T, typename = std::enable_if_t<std::is_integral_v<T>>> __attribute__((noinline, noipa)) T {state.MEMORY_INDEX_HELPER_NAME}(T {index_name}) {{",
+                f"    T {shadow_name} = {index_name};",
+                f"    T {mix_name} = static_cast<T>(({shadow_name} & ~static_cast<T>(0)) | ({shadow_name} & static_cast<T>(0)));",
+                f'    __asm__ __volatile__("" : "+r"({mix_name}) : : "memory");',
+                f"    return static_cast<T>({mix_name} + static_cast<T>(0));",
+                "}",
+                f"template <typename T, typename I> __attribute__((noinline, noipa)) auto {state.MEMORY_PTR_ADVANCE_HELPER_NAME}(T* {ptr_name}, I {index_name}) -> T* {{",
+                f"    I {shadow_name} = {state.MEMORY_INDEX_HELPER_NAME}(static_cast<I>({index_name}));",
+                f'    __asm__ __volatile__("" : "+r"({shadow_name}) : "r"({ptr_name}) : "memory");',
+                f"    return static_cast<T*>({ptr_name} + {shadow_name});",
+                "}",
+                f"template <typename T> __attribute__((noinline, noipa)) T* {state.MEMORY_MEMBER_HELPER_NAME}(T* {ptr_name}) {{",
+                f'    __asm__ __volatile__("" : : "g"({ptr_name}) : "memory");',
+                f"    return static_cast<T*>({ptr_name});",
+                "}",
+                "}",
+                "",
+            ]
+        ),
+    ]
+    helper_block = random.choice(helper_variants)
 
     lines = source_text.splitlines(keepends=True)
     insert_line_index = _find_insertion_line_index(lines)
@@ -235,30 +345,53 @@ def inject_dead_code_helpers(source_text):
     loop_a = generate_barcode_name(18)
     value_b = generate_barcode_name(18)
     shadow_b = generate_barcode_name(18)
-
-    helper_block = "\n".join(
-        [
-            "namespace {",
-            f"__attribute__((noinline, noipa)) int {helper_a}(int {value_a}) {{",
-            f"    int {shadow_a} = {value_a} ^ {seed_a};",
-            f"    for (int {loop_a} = 0; {loop_a} < 3; ++{loop_a}) {{",
-            f"        {shadow_a} = ({shadow_a} + {loop_a}) ^ {loop_a};",
-            "    }",
-            f"    return {shadow_a};",
-            "}",
-            f"__attribute__((noinline, noipa)) long long {helper_b}(long long {value_b}) {{",
-            f"    long long {shadow_b} = {value_b} + {seed_b};",
-            f"    if (({shadow_b} & 1LL) == 0) {{",
-            f"        {shadow_b} ^= {value_b};",
-            "    } else {",
-            f"        {shadow_b} -= {value_b};",
-            "    }",
-            f"    return {shadow_b};",
-            "}",
-            "}",
-            "",
-        ]
-    )
+    mix_name = generate_barcode_name(18)
+    helper_variants = [
+        "\n".join(
+            [
+                "namespace {",
+                f"__attribute__((noinline, noipa)) int {helper_a}(int {value_a}) {{",
+                f"    int {shadow_a} = {value_a} ^ {seed_a};",
+                f"    for (int {loop_a} = 0; {loop_a} < 3; ++{loop_a}) {{",
+                f"        {shadow_a} = ({shadow_a} + {loop_a}) ^ {loop_a};",
+                "    }",
+                f"    return {shadow_a};",
+                "}",
+                f"__attribute__((noinline, noipa)) long long {helper_b}(long long {value_b}) {{",
+                f"    long long {shadow_b} = {value_b} + {seed_b};",
+                f"    if (({shadow_b} & 1LL) == 0) {{",
+                f"        {shadow_b} ^= {value_b};",
+                "    } else {",
+                f"        {shadow_b} -= {value_b};",
+                "    }",
+                f"    return {shadow_b};",
+                "}",
+                "}",
+                "",
+            ]
+        ),
+        "\n".join(
+            [
+                "namespace {",
+                f"__attribute__((noinline, noipa)) int {helper_a}(int {value_a}) {{",
+                f"    int {shadow_a} = {value_a} + {seed_a};",
+                f"    int {mix_name} = {shadow_a};",
+                f"    for (int {loop_a} = 0; {loop_a} < 2; ++{loop_a}) {{",
+                f"        {mix_name} = ({mix_name} ^ {loop_a}) - {loop_a};",
+                "    }",
+                f"    return {mix_name};",
+                "}",
+                f"__attribute__((noinline, noipa)) long long {helper_b}(long long {value_b}) {{",
+                f"    long long {shadow_b} = ({value_b} ^ {seed_b}) + {seed_b};",
+                f"    long long {mix_name} = ({shadow_b} & 1LL) ? ({shadow_b} - {value_b}) : ({shadow_b} + {value_b});",
+                f"    return {mix_name};",
+                "}",
+                "}",
+                "",
+            ]
+        ),
+    ]
+    helper_block = random.choice(helper_variants)
 
     lines = source_text.splitlines(keepends=True)
     insert_line_index = _find_insertion_line_index(lines)
@@ -268,7 +401,7 @@ def inject_dead_code_helpers(source_text):
 
 
 def inject_tmp_addition_helpers(source_text):
-    """Injects recursive TMP helpers for integral addition rewrites."""
+    """Injects template-driven bitwise addition helpers for integral rewrites."""
     if not config.ENABLE_TMP_ADDITION_OBFUSCATION:
         vlog("tmp_add", "disabled")
         return source_text
@@ -279,133 +412,188 @@ def inject_tmp_addition_helpers(source_text):
 
     lhs_name = generate_barcode_name(18)
     rhs_name = generate_barcode_name(18)
-    split_name = generate_barcode_name(18)
     enable_name = generate_barcode_name(18)
     type_name = generate_barcode_name(18)
+    word_name = generate_barcode_name(18)
     left_type_name = generate_barcode_name(18)
     right_type_name = generate_barcode_name(18)
+    stage_struct_name = generate_barcode_name(18)
+    bit_struct_name = generate_barcode_name(18)
+    sequence_struct_name = generate_barcode_name(18)
+    bit_name = generate_barcode_name(18)
+    bits_name = generate_barcode_name(18)
+    carry_name = generate_barcode_name(18)
+    result_name = generate_barcode_name(18)
+    sum_name = generate_barcode_name(18)
+    next_name = generate_barcode_name(18)
+    one_name = generate_barcode_name(18)
+    seq_name = generate_barcode_name(18)
+    unsigned_lhs_name = generate_barcode_name(18)
+    unsigned_rhs_name = generate_barcode_name(18)
     variant = state.TMP_ADD_VARIANT or {
-        "depth": 3,
-        "split_mode": "half",
-        "base_mode": "plain",
-        "call_mode": "direct",
-        "helper_mode": "value_sfinae",
+        "engine_mode": "recursive",
+        "carry_mode": "majority",
+        "entry_mode": "direct",
     }
 
-    if variant["split_mode"] == "half":
-        split_expr = f"{rhs_name} / static_cast<T>(2)"
-    elif variant["split_mode"] == "biased_left":
-        split_expr = f"({rhs_name} + static_cast<T>(1)) / static_cast<T>(2)"
+    if variant["carry_mode"] == "xor_mix":
+        next_expr = (
+            f"static_cast<{word_name}>((({lhs_name} & {rhs_name}) | "
+            f"(({lhs_name} ^ {rhs_name}) & {carry_name})) & {one_name})"
+        )
     else:
-        split_expr = f"{rhs_name} - ({rhs_name} / static_cast<T>(2))"
+        next_expr = (
+            f"static_cast<{word_name}>((({lhs_name} & {rhs_name}) | "
+            f"({lhs_name} & {carry_name}) | ({rhs_name} & {carry_name})) & {one_name})"
+        )
 
-    if variant["base_mode"] == "commuted":
-        base_return = f"{rhs_name} + {lhs_name}"
-    elif variant["base_mode"] == "neg_sub":
-        base_return = f"{lhs_name} - (static_cast<T>(0) - {rhs_name})"
-    elif variant["base_mode"] == "double_neg":
-        base_return = f"-((static_cast<T>(0) - {lhs_name}) + (static_cast<T>(0) - {rhs_name}))"
+    if variant["entry_mode"] == "swap":
+        call_return = f"{state.TMP_ADD_STRUCT_NAME}<{word_name}>::eval({unsigned_rhs_name}, {unsigned_lhs_name})"
+    elif variant["entry_mode"] == "zero_left":
+        call_return = (
+            f"static_cast<{word_name}>({unsigned_lhs_name}) + "
+            f"{state.TMP_ADD_STRUCT_NAME}<{word_name}>::eval(static_cast<{word_name}>(0), {unsigned_rhs_name})"
+        )
+    elif variant["entry_mode"] == "zero_right":
+        call_return = (
+            f"{state.TMP_ADD_STRUCT_NAME}<{word_name}>::eval({unsigned_lhs_name}, static_cast<{word_name}>(0)) + "
+            f"static_cast<{word_name}>({unsigned_rhs_name})"
+        )
     else:
-        base_return = f"{lhs_name} + {rhs_name}"
+        call_return = f"{state.TMP_ADD_STRUCT_NAME}<{word_name}>::eval({unsigned_lhs_name}, {unsigned_rhs_name})"
 
-    if variant["call_mode"] == "swap":
-        call_return = f"{state.TMP_ADD_STRUCT_NAME}<{variant['depth']}>::template eval<T>(static_cast<T>({rhs_name}), static_cast<T>({lhs_name}))"
-    elif variant["call_mode"] == "lift_left":
-        call_return = f"{state.TMP_ADD_STRUCT_NAME}<{variant['depth']}>::template eval<T>(static_cast<T>(0), static_cast<T>({lhs_name})) + static_cast<T>({rhs_name})"
-    elif variant["call_mode"] == "lift_right":
-        call_return = f"static_cast<T>({lhs_name}) + {state.TMP_ADD_STRUCT_NAME}<{variant['depth']}>::template eval<T>(static_cast<T>(0), static_cast<T>({rhs_name}))"
-    else:
-        call_return = f"{state.TMP_ADD_STRUCT_NAME}<{variant['depth']}>::template eval<T>(static_cast<T>({lhs_name}), static_cast<T>({rhs_name}))"
-
-    helper_call_return_2 = call_return.replace(
-        f"{state.TMP_ADD_STRUCT_NAME}<{variant['depth']}>::template eval<T>",
-        f"{state.TMP_ADD_STRUCT_NAME}<{variant['depth']}, T>::eval",
+    helper_signature = (
+        f"template <typename {left_type_name}, typename {right_type_name}, "
+        f"typename {type_name} = std::decay_t<decltype(std::declval<{left_type_name}>() + std::declval<{right_type_name}>())>, "
+        f"typename {enable_name} = std::enable_if_t<std::is_integral_v<{type_name}>>> "
+        f"__attribute__((noinline, noipa)) {type_name} {state.TMP_ADD_HELPER_NAME}"
+        f"({left_type_name} {lhs_name}, {right_type_name} {rhs_name})"
     )
 
-    if variant["helper_mode"] == "type_sfinae":
-        helper_signature_1 = (
-            f"template <typename {left_type_name}, typename {right_type_name}, "
-            f"typename {type_name} = std::common_type_t<{left_type_name}, {right_type_name}>, "
-            f"typename {enable_name} = std::enable_if_t<std::is_integral_v<{type_name}>>> "
-            f"__attribute__((noinline, noipa)) {type_name} {state.TMP_ADD_HELPER_NAME}"
-            f"({left_type_name} {lhs_name}, {right_type_name} {rhs_name})"
-        )
-        helper_signature_2 = helper_signature_1
-        helper_body_1 = [
-            f"    using T = {type_name};",
-            f"    return {call_return};",
+    recursive_variant = "\n".join(
+        [
+            "#include <type_traits>",
+            "#include <utility>",
+            "namespace {",
+            f"template <typename {word_name}, std::size_t {bit_name}, std::size_t {bits_name}> struct {stage_struct_name} {{",
+            f"    static {word_name} eval({word_name} {unsigned_lhs_name}, {word_name} {unsigned_rhs_name}, {word_name} {carry_name}) {{",
+            f"        constexpr {word_name} {one_name} = static_cast<{word_name}>(1);",
+            f"        const {word_name} {lhs_name} = static_cast<{word_name}>(({unsigned_lhs_name} >> {bit_name}) & {one_name});",
+            f"        const {word_name} {rhs_name} = static_cast<{word_name}>(({unsigned_rhs_name} >> {bit_name}) & {one_name});",
+            f"        const {word_name} {sum_name} = static_cast<{word_name}>(({lhs_name} ^ {rhs_name} ^ {carry_name}) & {one_name});",
+            f"        const {word_name} {next_name} = {next_expr};",
+            f"        return static_cast<{word_name}>(({sum_name} << {bit_name}) | "
+            f"{stage_struct_name}<{word_name}, {bit_name} + 1, {bits_name}>::eval({unsigned_lhs_name}, {unsigned_rhs_name}, {next_name}));",
+            "    }",
+            "};",
+            f"template <typename {word_name}, std::size_t {bits_name}> struct {stage_struct_name}<{word_name}, {bits_name}, {bits_name}> {{",
+            f"    static {word_name} eval({word_name}, {word_name}, {word_name}) {{",
+            f"        return static_cast<{word_name}>(0);",
+            "    }",
+            "};",
+            f"template <typename {word_name}> struct {state.TMP_ADD_STRUCT_NAME} {{",
+            f"    static {word_name} eval({word_name} {unsigned_lhs_name}, {word_name} {unsigned_rhs_name}) {{",
+            f"        return {stage_struct_name}<{word_name}, 0, sizeof({word_name}) * 8>::eval(",
+            f"            {unsigned_lhs_name}, {unsigned_rhs_name}, static_cast<{word_name}>(0));",
+            "    }",
+            "};",
+            helper_signature + " {",
+            f"    using {word_name} = std::make_unsigned_t<{type_name}>;",
+            f"    const {word_name} {unsigned_lhs_name} = static_cast<{word_name}>(static_cast<{type_name}>({lhs_name}));",
+            f"    const {word_name} {unsigned_rhs_name} = static_cast<{word_name}>(static_cast<{type_name}>({rhs_name}));",
+            f"    return static_cast<{type_name}>({call_return});",
+            "}",
+            "}",
+            "",
         ]
-        helper_body_2 = [
-            f"    using T = {type_name};",
-            f"    return {helper_call_return_2};",
+    )
+
+    index_sequence_variant = "\n".join(
+        [
+            "#include <type_traits>",
+            "#include <utility>",
+            "namespace {",
+            f"template <typename {word_name}, std::size_t {bit_name}> struct {bit_struct_name} {{",
+            f"    static {word_name} eval({word_name} {unsigned_lhs_name}, {word_name} {unsigned_rhs_name}, {word_name}& {carry_name}) {{",
+            f"        constexpr {word_name} {one_name} = static_cast<{word_name}>(1);",
+            f"        const {word_name} {lhs_name} = static_cast<{word_name}>(({unsigned_lhs_name} >> {bit_name}) & {one_name});",
+            f"        const {word_name} {rhs_name} = static_cast<{word_name}>(({unsigned_rhs_name} >> {bit_name}) & {one_name});",
+            f"        const {word_name} {sum_name} = static_cast<{word_name}>(({lhs_name} ^ {rhs_name} ^ {carry_name}) & {one_name});",
+            f"        const {word_name} {next_name} = {next_expr};",
+            f"        {carry_name} = {next_name};",
+            f"        return static_cast<{word_name}>({sum_name} << {bit_name});",
+            "    }",
+            "};",
+            f"template <typename {word_name}, typename {seq_name}> struct {sequence_struct_name};",
+            f"template <typename {word_name}, std::size_t... {bit_name}> struct {sequence_struct_name}<{word_name}, std::index_sequence<{bit_name}...>> {{",
+            f"    static {word_name} eval({word_name} {unsigned_lhs_name}, {word_name} {unsigned_rhs_name}) {{",
+            f"        {word_name} {carry_name} = static_cast<{word_name}>(0);",
+            f"        {word_name} {result_name} = static_cast<{word_name}>(0);",
+            f"        (({result_name} = static_cast<{word_name}>({result_name} | "
+            f"{bit_struct_name}<{word_name}, {bit_name}>::eval({unsigned_lhs_name}, {unsigned_rhs_name}, {carry_name}))), ...);",
+            f"        return {result_name};",
+            "    }",
+            "};",
+            helper_signature + " {",
+            f"    using {word_name} = std::make_unsigned_t<{type_name}>;",
+            f"    using {seq_name} = std::make_index_sequence<sizeof({word_name}) * 8>;",
+            f"    const {word_name} {unsigned_lhs_name} = static_cast<{word_name}>(static_cast<{type_name}>({lhs_name}));",
+            f"    const {word_name} {unsigned_rhs_name} = static_cast<{word_name}>(static_cast<{type_name}>({rhs_name}));",
+            f"    return static_cast<{type_name}>({sequence_struct_name}<{word_name}, {seq_name}>::eval({unsigned_lhs_name}, {unsigned_rhs_name}));",
+            "}",
+            "}",
+            "",
         ]
-    else:
-        helper_signature_1 = (
-            f"template <typename {left_type_name}, typename {right_type_name}, "
-            f"typename {enable_name} = std::enable_if_t<std::is_integral_v<std::common_type_t<{left_type_name}, {right_type_name}>>>> "
-            f"__attribute__((noinline, noipa)) auto {state.TMP_ADD_HELPER_NAME}"
-            f"({left_type_name} {lhs_name}, {right_type_name} {rhs_name})"
-            f" -> std::common_type_t<{left_type_name}, {right_type_name}>"
-        )
-        helper_signature_2 = helper_signature_1
-        helper_body_1 = [
-            f"    using T = std::common_type_t<{left_type_name}, {right_type_name}>;",
-            f"    return {call_return};",
-        ]
-        helper_body_2 = [
-            f"    using T = std::common_type_t<{left_type_name}, {right_type_name}>;",
-            f"    return {helper_call_return_2};",
-        ]
+    )
 
     helper_variants = [
+        recursive_variant,
+        index_sequence_variant,
         "\n".join(
             [
                 "#include <type_traits>",
+                "#include <utility>",
                 "namespace {",
-                f"template <int Depth> struct {state.TMP_ADD_STRUCT_NAME} {{",
-                f"    template <typename T> static T eval(T {lhs_name}, T {rhs_name}) {{",
-                f"        T {split_name} = {split_expr};",
-                f"        return {state.TMP_ADD_STRUCT_NAME}<Depth - 1>::template eval<T>({lhs_name}, {split_name}) +",
-                f"               {state.TMP_ADD_STRUCT_NAME}<Depth - 1>::template eval<T>(static_cast<T>(0), {rhs_name} - {split_name});",
+                f"template <typename {word_name}, std::size_t {bit_name}, std::size_t {bits_name}> struct {stage_struct_name} {{",
+                f"    static {word_name} eval({word_name} {unsigned_lhs_name}, {word_name} {unsigned_rhs_name}, {word_name} {carry_name}) {{",
+                f"        constexpr {word_name} {one_name} = static_cast<{word_name}>(1);",
+                f"        const {word_name} {lhs_name} = static_cast<{word_name}>(({unsigned_lhs_name} >> {bit_name}) & {one_name});",
+                f"        const {word_name} {rhs_name} = static_cast<{word_name}>(({unsigned_rhs_name} >> {bit_name}) & {one_name});",
+                f"        const {word_name} {sum_name} = static_cast<{word_name}>(({lhs_name} ^ {rhs_name} ^ {carry_name}) & {one_name});",
+                f"        const {word_name} {next_name} = {next_expr};",
+                f"        return static_cast<{word_name}>(({sum_name} << {bit_name}) ^ "
+                f"{stage_struct_name}<{word_name}, {bit_name} + 1, {bits_name}>::eval({unsigned_lhs_name}, {unsigned_rhs_name}, {next_name}));",
                 "    }",
                 "};",
-                f"template <> struct {state.TMP_ADD_STRUCT_NAME}<0> {{",
-                f"    template <typename T> static T eval(T {lhs_name}, T {rhs_name}) {{",
-                f"        return {base_return};",
+                f"template <typename {word_name}, std::size_t {bits_name}> struct {stage_struct_name}<{word_name}, {bits_name}, {bits_name}> {{",
+                f"    static {word_name} eval({word_name}, {word_name}, {word_name}) {{",
+                f"        return static_cast<{word_name}>(0);",
                 "    }",
                 "};",
-                helper_signature_1 + " {",
-                *helper_body_1,
-                "}",
-                "}",
-                "",
-            ]
-        ),
-        "\n".join(
-            [
-                "#include <type_traits>",
-                "namespace {",
-                f"template <int Depth, typename T> struct {state.TMP_ADD_STRUCT_NAME} {{",
-                f"    static T eval(T {lhs_name}, T {rhs_name}) {{",
-                f"        T {split_name} = {split_expr};",
-                f"        return {state.TMP_ADD_STRUCT_NAME}<Depth - 1, T>::eval({lhs_name}, {rhs_name} - {split_name}) +",
-                f"               {state.TMP_ADD_STRUCT_NAME}<Depth - 1, T>::eval(static_cast<T>(0), {split_name});",
+                f"template <typename {word_name}> struct {state.TMP_ADD_STRUCT_NAME} {{",
+                f"    static {word_name} eval({word_name} {unsigned_lhs_name}, {word_name} {unsigned_rhs_name}) {{",
+                f"        return {stage_struct_name}<{word_name}, 0, sizeof({word_name}) * 8>::eval(",
+                f"            {unsigned_lhs_name}, {unsigned_rhs_name}, static_cast<{word_name}>(0));",
                 "    }",
                 "};",
-                f"template <typename T> struct {state.TMP_ADD_STRUCT_NAME}<0, T> {{",
-                f"    static T eval(T {lhs_name}, T {rhs_name}) {{",
-                f"        return {base_return};",
-                "    }",
-                "};",
-                helper_signature_2 + " {",
-                *helper_body_2,
+                helper_signature + " {",
+                f"    using {word_name} = std::make_unsigned_t<{type_name}>;",
+                f"    const {word_name} {unsigned_lhs_name} = static_cast<{word_name}>(static_cast<{type_name}>({lhs_name}));",
+                f"    const {word_name} {unsigned_rhs_name} = static_cast<{word_name}>(static_cast<{type_name}>({rhs_name}));",
+                f"    return static_cast<{type_name}>({call_return});",
                 "}",
                 "}",
                 "",
             ]
         ),
     ]
-    helper_block = random.choice(helper_variants)
+
+    if variant["engine_mode"] == "index_sequence":
+        helper_block = helper_variants[1]
+    elif variant["carry_mode"] == "xor_mix":
+        helper_block = helper_variants[2]
+    else:
+        helper_block = helper_variants[0]
 
     lines = source_text.splitlines(keepends=True)
     insert_line_index = _find_insertion_line_index(lines)
@@ -510,6 +698,7 @@ def inject_data_flow_helpers(source_text):
         "mask_a": 0x5A,
         "mask_b": 0x33,
         "merge_mode": "direct",
+        "unpack_mode": "plain",
     }
     lhs_name = generate_barcode_name(18)
     rhs_name = generate_barcode_name(18)
@@ -543,6 +732,20 @@ def inject_data_flow_helpers(source_text):
         merge_plus = f"{state.DATA_FLOW_STRUCT_NAME}<T>{{{lhs_name}.a + {rhs_name}.a, {lhs_name}.b + {rhs_name}.b, ({lhs_name}.noise ^ {rhs_name}.noise)}}"
         merge_minus = f"{state.DATA_FLOW_STRUCT_NAME}<T>{{{lhs_name}.a - {rhs_name}.a, {lhs_name}.b - {rhs_name}.b, ({lhs_name}.noise - {rhs_name}.noise)}}"
 
+    if variant["unpack_mode"] == "mask_fold":
+        unpack_lines = [
+            f"    T {noise_name} = static_cast<T>({value_name}.noise ^ {mask_b_expr});",
+            f"    return static_cast<T>(({unpack_expr}) + ({noise_name} * static_cast<T>(0)));",
+        ]
+    elif variant["unpack_mode"] == "volatile_noise":
+        unpack_lines = [
+            f"    auto {noise_name} = {value_name}.noise;",
+            f'    __asm__ __volatile__("" : "+r"({noise_name}) : : "memory");',
+            f"    return {unpack_expr};",
+        ]
+    else:
+        unpack_lines = [f"    return {unpack_expr};"]
+
     helper_variants = [
         "\n".join(
             [
@@ -560,7 +763,7 @@ def inject_data_flow_helpers(source_text):
                 "}",
                 f"template <typename T, typename {enable_name} = std::enable_if_t<std::is_integral_v<T>>>",
                 f"__attribute__((noinline, noipa)) T {state.DATA_FLOW_UNPACK_HELPER_NAME}({state.DATA_FLOW_STRUCT_NAME}<T> {value_name}) {{",
-                f"    return {unpack_expr};",
+                *unpack_lines,
                 "}",
                 f"template <typename T, typename {enable_name} = std::enable_if_t<std::is_integral_v<T>>>",
                 f"__attribute__((noinline, noipa)) {state.DATA_FLOW_STRUCT_NAME}<T> {state.DATA_FLOW_MERGE_HELPER_NAME}({state.DATA_FLOW_STRUCT_NAME}<T> {lhs_name}, {state.DATA_FLOW_STRUCT_NAME}<T> {rhs_name}, char {op_name}) {{",
@@ -586,9 +789,7 @@ def inject_data_flow_helpers(source_text):
                 "}",
                 f"template <typename T, typename {enable_name} = std::enable_if_t<std::is_integral_v<T>>>",
                 f"__attribute__((noinline, noipa)) T {state.DATA_FLOW_UNPACK_HELPER_NAME}({state.DATA_FLOW_STRUCT_NAME}<T> {value_name}) {{",
-                f"    auto {noise_name} = {value_name}.noise;",
-                f'    __asm__ __volatile__("" : "+r"({noise_name}) : : "memory");',
-                f"    return {unpack_expr};",
+                *unpack_lines,
                 "}",
                 f"template <typename T, typename {enable_name} = std::enable_if_t<std::is_integral_v<T>>>",
                 f"__attribute__((noinline, noipa)) {state.DATA_FLOW_STRUCT_NAME}<T> {state.DATA_FLOW_MERGE_HELPER_NAME}({state.DATA_FLOW_STRUCT_NAME}<T> {lhs_name}, {state.DATA_FLOW_STRUCT_NAME}<T> {rhs_name}, char {op_name}) {{",
@@ -709,44 +910,107 @@ def inject_type_level_helpers(source_text):
         return source_text
 
     state.init_type_level_names()
-    variant = state.OPAQUE_WRAPPER_VARIANT or {"key_a": 0x55, "key_b": 0x33}
+    variant = state.OPAQUE_WRAPPER_VARIANT or {
+        "key_a": 0x55,
+        "key_b": 0x33,
+        "encode_mode": "xor_add",
+        "compare_mode": "direct",
+    }
     value_name = generate_barcode_name(18)
     storage_name = generate_barcode_name(18)
     rhs_name = generate_barcode_name(18)
-    helper_block = "\n".join(
-        [
-            "#include <type_traits>",
-            "namespace {",
-            f"template <typename T, typename = std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>>> struct {state.OPAQUE_WRAPPER_NAME} {{",
-            f"    T {storage_name};",
-            f"    static constexpr T key_a = static_cast<T>({variant['key_a']});",
-            f"    static constexpr T key_b = static_cast<T>({variant['key_b']});",
-            f"    static constexpr T encode(T {value_name}) {{ return static_cast<T>(({value_name} ^ key_a) + key_b); }}",
-            f"    static constexpr T decode(T {value_name}) {{ return static_cast<T>(({value_name} - key_b) ^ key_a); }}",
-            f"    constexpr {state.OPAQUE_WRAPPER_NAME}() : {storage_name}(encode(0)) {{}}",
-            f"    constexpr {state.OPAQUE_WRAPPER_NAME}(T {value_name}) : {storage_name}(encode({value_name})) {{}}",
-            f"    constexpr T value() const {{ return decode({storage_name}); }}",
-            "    constexpr operator T() const { return value(); }",
-            f"    {state.OPAQUE_WRAPPER_NAME}& operator=(T {value_name}) {{ {storage_name} = encode({value_name}); return *this; }}",
-            f"    {state.OPAQUE_WRAPPER_NAME}& operator++() {{ *this = static_cast<T>(value() + 1); return *this; }}",
-            f"    {state.OPAQUE_WRAPPER_NAME} operator++(int) {{ auto copy = *this; ++(*this); return copy; }}",
-            f"    {state.OPAQUE_WRAPPER_NAME}& operator+=(T {rhs_name}) {{ *this = static_cast<T>(value() + {rhs_name}); return *this; }}",
-            f"    {state.OPAQUE_WRAPPER_NAME}& operator-=(T {rhs_name}) {{ *this = static_cast<T>(value() - {rhs_name}); return *this; }}",
-            "};",
-            f"template <typename T, typename U> auto operator+(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) -> {state.OPAQUE_WRAPPER_NAME}<std::common_type_t<T, U>> {{ using R = std::common_type_t<T, U>; return {state.OPAQUE_WRAPPER_NAME}<R>(static_cast<R>(lhs.value()) + static_cast<R>(rhs)); }}",
-            f"template <typename T, typename U> auto operator-(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) -> {state.OPAQUE_WRAPPER_NAME}<std::common_type_t<T, U>> {{ using R = std::common_type_t<T, U>; return {state.OPAQUE_WRAPPER_NAME}<R>(static_cast<R>(lhs.value()) - static_cast<R>(rhs)); }}",
-            f"template <typename T, typename U> auto operator*(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) -> {state.OPAQUE_WRAPPER_NAME}<std::common_type_t<T, U>> {{ using R = std::common_type_t<T, U>; return {state.OPAQUE_WRAPPER_NAME}<R>(static_cast<R>(lhs.value()) * static_cast<R>(rhs)); }}",
-            f"template <typename T, typename U> auto operator/(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) -> {state.OPAQUE_WRAPPER_NAME}<std::common_type_t<T, U>> {{ using R = std::common_type_t<T, U>; return {state.OPAQUE_WRAPPER_NAME}<R>(static_cast<R>(lhs.value()) / static_cast<R>(rhs)); }}",
-            f"template <typename T, typename U> bool operator==(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return lhs.value() == static_cast<T>(rhs); }}",
-            f"template <typename T, typename U> bool operator!=(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return lhs.value() != static_cast<T>(rhs); }}",
-            f"template <typename T, typename U> bool operator<(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return lhs.value() < static_cast<T>(rhs); }}",
-            f"template <typename T, typename U> bool operator<=(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return lhs.value() <= static_cast<T>(rhs); }}",
-            f"template <typename T, typename U> bool operator>(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return lhs.value() > static_cast<T>(rhs); }}",
-            f"template <typename T, typename U> bool operator>=(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return lhs.value() >= static_cast<T>(rhs); }}",
-            "}",
-            "",
-        ]
+    key_a_name = generate_barcode_name(18)
+    key_b_name = generate_barcode_name(18)
+    compare_type = (
+        "std::decay_t<decltype(static_cast<T>(lhs.value()) + static_cast<T>(rhs))>"
+        if variant["compare_mode"] == "common_type"
+        else "T"
     )
+    compare_lhs = (
+        f"static_cast<{compare_type}>(lhs.value())" if variant["compare_mode"] == "common_type" else "lhs.value()"
+    )
+    compare_rhs = f"static_cast<{compare_type}>(rhs)"
+    if variant["encode_mode"] == "add_xor":
+        encode_expr = f"static_cast<T>(({value_name} + {key_b_name}) ^ {key_a_name})"
+        decode_expr = f"static_cast<T>(({value_name} ^ {key_a_name}) - {key_b_name})"
+    elif variant["encode_mode"] == "xor_sub":
+        encode_expr = f"static_cast<T>(({value_name} ^ {key_a_name}) - {key_b_name})"
+        decode_expr = f"static_cast<T>(({value_name} + {key_b_name}) ^ {key_a_name})"
+    else:
+        encode_expr = f"static_cast<T>(({value_name} ^ {key_a_name}) + {key_b_name})"
+        decode_expr = f"static_cast<T>(({value_name} - {key_b_name}) ^ {key_a_name})"
+
+    helper_variants = [
+        "\n".join(
+            [
+                "#include <type_traits>",
+                "namespace {",
+                f"template <typename T, typename = std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>>> struct {state.OPAQUE_WRAPPER_NAME} {{",
+                f"    T {storage_name};",
+                f"    static constexpr T {key_a_name} = static_cast<T>({variant['key_a']});",
+                f"    static constexpr T {key_b_name} = static_cast<T>({variant['key_b']});",
+                f"    static constexpr T encode(T {value_name}) {{ return {encode_expr}; }}",
+                f"    static constexpr T decode(T {value_name}) {{ return {decode_expr}; }}",
+                f"    constexpr {state.OPAQUE_WRAPPER_NAME}() : {storage_name}(encode(0)) {{}}",
+                f"    constexpr {state.OPAQUE_WRAPPER_NAME}(T {value_name}) : {storage_name}(encode({value_name})) {{}}",
+                f"    constexpr T value() const {{ return decode({storage_name}); }}",
+                "    constexpr operator T() const { return value(); }",
+                f"    {state.OPAQUE_WRAPPER_NAME}& operator=(T {value_name}) {{ {storage_name} = encode({value_name}); return *this; }}",
+                f"    {state.OPAQUE_WRAPPER_NAME}& operator++() {{ *this = static_cast<T>(value() + 1); return *this; }}",
+                f"    {state.OPAQUE_WRAPPER_NAME} operator++(int) {{ auto copy = *this; ++(*this); return copy; }}",
+                f"    {state.OPAQUE_WRAPPER_NAME}& operator+=(T {rhs_name}) {{ *this = static_cast<T>(value() + {rhs_name}); return *this; }}",
+                f"    {state.OPAQUE_WRAPPER_NAME}& operator-=(T {rhs_name}) {{ *this = static_cast<T>(value() - {rhs_name}); return *this; }}",
+                "};",
+                f"template <typename T, typename U> auto operator+(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) -> {state.OPAQUE_WRAPPER_NAME}<std::common_type_t<T, U>> {{ using R = std::common_type_t<T, U>; return {state.OPAQUE_WRAPPER_NAME}<R>(static_cast<R>(lhs.value()) + static_cast<R>(rhs)); }}",
+                f"template <typename T, typename U> auto operator-(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) -> {state.OPAQUE_WRAPPER_NAME}<std::common_type_t<T, U>> {{ using R = std::common_type_t<T, U>; return {state.OPAQUE_WRAPPER_NAME}<R>(static_cast<R>(lhs.value()) - static_cast<R>(rhs)); }}",
+                f"template <typename T, typename U> auto operator*(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) -> {state.OPAQUE_WRAPPER_NAME}<std::common_type_t<T, U>> {{ using R = std::common_type_t<T, U>; return {state.OPAQUE_WRAPPER_NAME}<R>(static_cast<R>(lhs.value()) * static_cast<R>(rhs)); }}",
+                f"template <typename T, typename U> auto operator/(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) -> {state.OPAQUE_WRAPPER_NAME}<std::common_type_t<T, U>> {{ using R = std::common_type_t<T, U>; return {state.OPAQUE_WRAPPER_NAME}<R>(static_cast<R>(lhs.value()) / static_cast<R>(rhs)); }}",
+                f"template <typename T, typename U> bool operator==(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return {compare_lhs} == {compare_rhs}; }}",
+                f"template <typename T, typename U> bool operator!=(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return {compare_lhs} != {compare_rhs}; }}",
+                f"template <typename T, typename U> bool operator<(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return {compare_lhs} < {compare_rhs}; }}",
+                f"template <typename T, typename U> bool operator<=(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return {compare_lhs} <= {compare_rhs}; }}",
+                f"template <typename T, typename U> bool operator>(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return {compare_lhs} > {compare_rhs}; }}",
+                f"template <typename T, typename U> bool operator>=(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return {compare_lhs} >= {compare_rhs}; }}",
+                "}",
+                "",
+            ]
+        ),
+        "\n".join(
+            [
+                "#include <type_traits>",
+                "namespace {",
+                f"template <typename T, typename = std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>>> struct {state.OPAQUE_WRAPPER_NAME} {{",
+                f"    T {storage_name};",
+                f"    static constexpr T {key_a_name} = static_cast<T>({variant['key_a']});",
+                f"    static constexpr T {key_b_name} = static_cast<T>({variant['key_b']});",
+                f"    static constexpr T encode(T {value_name}) {{ return {encode_expr}; }}",
+                f"    static constexpr T decode(T {value_name}) {{ return {decode_expr}; }}",
+                f"    constexpr {state.OPAQUE_WRAPPER_NAME}() : {storage_name}(encode(0)) {{}}",
+                f"    constexpr {state.OPAQUE_WRAPPER_NAME}(T {value_name}) : {storage_name}(encode({value_name})) {{}}",
+                f"    constexpr T value() const {{ return decode({storage_name}); }}",
+                "    constexpr operator T() const { return value(); }",
+                f"    {state.OPAQUE_WRAPPER_NAME}& operator=(T {value_name}) {{ {storage_name} = encode({value_name}); return *this; }}",
+                f"    {state.OPAQUE_WRAPPER_NAME}& operator++() {{ {storage_name} = encode(static_cast<T>(value() + 1)); return *this; }}",
+                f"    {state.OPAQUE_WRAPPER_NAME} operator++(int) {{ auto copy = *this; {storage_name} = encode(static_cast<T>(value() + 1)); return copy; }}",
+                f"    {state.OPAQUE_WRAPPER_NAME}& operator+=(T {rhs_name}) {{ {storage_name} = encode(static_cast<T>(value() + {rhs_name})); return *this; }}",
+                f"    {state.OPAQUE_WRAPPER_NAME}& operator-=(T {rhs_name}) {{ {storage_name} = encode(static_cast<T>(value() - {rhs_name})); return *this; }}",
+                "};",
+                f"template <typename T, typename U> auto operator+(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) -> {state.OPAQUE_WRAPPER_NAME}<std::common_type_t<T, U>> {{ using R = std::common_type_t<T, U>; return {state.OPAQUE_WRAPPER_NAME}<R>(static_cast<R>(lhs.value()) + static_cast<R>(rhs)); }}",
+                f"template <typename T, typename U> auto operator-(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) -> {state.OPAQUE_WRAPPER_NAME}<std::common_type_t<T, U>> {{ using R = std::common_type_t<T, U>; return {state.OPAQUE_WRAPPER_NAME}<R>(static_cast<R>(lhs.value()) - static_cast<R>(rhs)); }}",
+                f"template <typename T, typename U> auto operator*(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) -> {state.OPAQUE_WRAPPER_NAME}<std::common_type_t<T, U>> {{ using R = std::common_type_t<T, U>; return {state.OPAQUE_WRAPPER_NAME}<R>(static_cast<R>(lhs.value()) * static_cast<R>(rhs)); }}",
+                f"template <typename T, typename U> auto operator/(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) -> {state.OPAQUE_WRAPPER_NAME}<std::common_type_t<T, U>> {{ using R = std::common_type_t<T, U>; return {state.OPAQUE_WRAPPER_NAME}<R>(static_cast<R>(lhs.value()) / static_cast<R>(rhs)); }}",
+                f"template <typename T, typename U> bool operator==(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return {compare_lhs} == {compare_rhs}; }}",
+                f"template <typename T, typename U> bool operator!=(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return {compare_lhs} != {compare_rhs}; }}",
+                f"template <typename T, typename U> bool operator<(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return {compare_lhs} < {compare_rhs}; }}",
+                f"template <typename T, typename U> bool operator<=(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return {compare_lhs} <= {compare_rhs}; }}",
+                f"template <typename T, typename U> bool operator>(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return {compare_lhs} > {compare_rhs}; }}",
+                f"template <typename T, typename U> bool operator>=(const {state.OPAQUE_WRAPPER_NAME}<T>& lhs, const U& rhs) {{ return {compare_lhs} >= {compare_rhs}; }}",
+                "}",
+                "",
+            ]
+        ),
+    ]
+    helper_block = random.choice(helper_variants)
 
     lines = source_text.splitlines(keepends=True)
     insert_line_index = _find_insertion_line_index(lines)

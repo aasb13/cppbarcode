@@ -9,6 +9,7 @@ from util import (
     find_matching_brace,
     generate_barcode_name,
     has_vm_skip_marker,
+    is_performance_sensitive_function,
     indent_block,
     is_escaped,
     iter_function_definitions,
@@ -423,7 +424,27 @@ def is_supported_for_flattening(body_text):
     return not any(marker in body_text for marker in unsupported_markers)
 
 
-def flatten_function_body(body_text, base_indent):
+def _extract_flatten_return_type(prefix, function_name):
+    name_index = prefix.rfind(function_name)
+    if name_index == -1:
+        return None
+    return_type = prefix[:name_index].strip()
+    if not return_type:
+        return None
+    tokens = return_type.split()
+    while tokens and tokens[0] in {
+        "static", "inline", "constexpr", "virtual", "friend", "extern", "__attribute__",
+    }:
+        tokens.pop(0)
+    cleaned = " ".join(tokens).strip()
+    if not cleaned:
+        return None
+    if "(" in cleaned or ")" in cleaned or "auto" == cleaned or cleaned.endswith("&") or cleaned.endswith("&&"):
+        return None
+    return cleaned
+
+
+def flatten_function_body(body_text, base_indent, return_type=None):
     statements = split_top_level_statements(body_text)
     if len(statements) < 2:
         return None
@@ -523,7 +544,11 @@ def flatten_function_body(body_text, base_indent):
     flattened_lines.append(f"{indent}    default: goto {exit_label};")
     flattened_lines.append(f"{indent}    }}")
     flattened_lines.append(f"{indent}}}")
-    flattened_lines.append(f"{indent}{exit_label}: ;")
+    flattened_lines.append(f"{indent}{exit_label}:")
+    if return_type is None or return_type == "void":
+        flattened_lines.append(f"{indent}    ;")
+    else:
+        flattened_lines.append(f"{indent}    return {return_type}{{}};")
 
     return "{\n" + "\n".join(flattened_lines) + f"\n{base_indent}}}"
 
@@ -625,9 +650,16 @@ def apply_control_flow_flattening(source_text):
         if has_vm_skip_marker(source_text, line_start):
             scan_index = cursor
             continue
+        if is_performance_sensitive_function(stripped_header, body_text):
+            scan_index = cursor
+            continue
+        return_type = _extract_flatten_return_type(prefix, name_match.group(1))
+        if return_type is None and prefix.strip() != "void":
+            scan_index = cursor
+            continue
         leading_segment = source_text[line_start:brace_index]
         base_indent = re.match(r"\s*", leading_segment).group(0)
-        flattened_body = flatten_function_body(body_text, base_indent)
+        flattened_body = flatten_function_body(body_text, base_indent, return_type=return_type)
         if flattened_body is None:
             scan_index = brace_index + 1
             continue
@@ -677,7 +709,7 @@ def apply_function_cloning(source_text):
         if any(part == "..." for part in param_parts):
             continue
 
-        clone_count = 2
+        clone_count = random.randint(2, 4)
         clone_names = [generate_barcode_name(18) for _ in range(clone_count)]
         clone_variants = []
         for variant_index, clone_name in enumerate(clone_names):

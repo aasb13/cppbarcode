@@ -43,6 +43,11 @@ class RuntimeHelperTransformer:
         self.apply = apply_fn
 
 
+class ControlBodyBracingTransformer:
+    def __init__(self, apply_fn):
+        self.apply = apply_fn
+
+
 class STLWrapperTransformer:
     def __init__(self, apply_fn):
         self.apply = apply_fn

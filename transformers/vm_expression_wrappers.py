@@ -69,6 +69,9 @@ BLOCKED_TYPE_FRAGMENTS = {
 }
 SUPPORTED_BINARY_OPS = {
     "+",
+    "-",
+    "*",
+    "/",
 }
 
 

@@ -311,14 +311,24 @@ def get_function_pointer_call_replacement(node, source_text, name_map, depth=0):
     if callee_text in state.VM_EXPRESSION_WRAPPER_NAMES:
         return None
 
+    param_types = [
+        child.type.get_canonical().spelling
+        for child in referenced.get_children()
+        if child.kind == clang.cindex.CursorKind.PARM_DECL
+    ]
+    fn_pointer_type = (
+        f"static_cast<{referenced.result_type.get_canonical().spelling} (*)({', '.join(param_types) if param_types else 'void'})>(&{{}})"
+    )
+
     state.init_function_pointer_helper_names()
     callee_name = name_map.get(callee_text, callee_text)
     arg_exprs = [render_recursive_expression(child, source_text, name_map, depth + 1) for child in children[1:]]
-    staged_pointer = f"{state.FUNCTION_PTR_STAGE_HELPER_NAME}(&{callee_name})"
+    resolved_pointer = fn_pointer_type.format(callee_name)
+    staged_pointer = f"{state.FUNCTION_PTR_STAGE_HELPER_NAME}({resolved_pointer})"
     call_variants = [
         f"{state.FUNCTION_PTR_INVOKE_HELPER_NAME}({staged_pointer}{', ' if arg_exprs else ''}{', '.join(arg_exprs)})",
         f"{state.FUNCTION_PTR_INVOKE_HELPER_NAME}(({staged_pointer}){', ' if arg_exprs else ''}{', '.join(arg_exprs)})",
-        f"{state.FUNCTION_PTR_INVOKE_HELPER_NAME}({state.FUNCTION_PTR_STAGE_HELPER_NAME}({state.FUNCTION_PTR_STAGE_HELPER_NAME}(&{callee_name})){', ' if arg_exprs else ''}{', '.join(arg_exprs)})",
+        f"{state.FUNCTION_PTR_INVOKE_HELPER_NAME}({state.FUNCTION_PTR_STAGE_HELPER_NAME}({state.FUNCTION_PTR_STAGE_HELPER_NAME}({resolved_pointer})){', ' if arg_exprs else ''}{', '.join(arg_exprs)})",
     ]
     return random.choice(call_variants)
 
@@ -459,7 +469,7 @@ def get_type_level_replacement(node, source_text, name_map):
     state.init_type_level_names()
     initializer = children[0]
     var_name = name_map.get(node.spelling, node.spelling)
-    init_text = render_recursive_expression(initializer, source_text, name_map, depth=1)
+    init_text = render_obfuscated_expression(initializer, source_text, name_map)
     return f"{state.OPAQUE_WRAPPER_NAME}<{node.type.spelling}> {var_name} = {init_text};"
 
 

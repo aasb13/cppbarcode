@@ -8,6 +8,7 @@ import state
 from transformers import (
     AstRewriteTransformer,
     CFGPollutionTransformer,
+    ControlBodyBracingTransformer,
     ControlFlowFlatteningTransformer,
     DataFlowTransformer,
     DeadCodeBlockTransformer,
@@ -31,6 +32,7 @@ from transformers import (
     WhitespaceDegradationTransformer,
 )
 from transformers.ast_rewrite import build_string_literal_replacement, collect_ast_replacements
+from transformers.brace_expansion import expand_inline_control_bodies
 from transformers.define_obfuscation import apply_define_obfuscation
 from transformers.dead_code_removal import remove_dead_code
 from transformers.formatting import apply_stylometric_noise
@@ -88,6 +90,7 @@ DEAD_CODE_BLOCK_TRANSFORMER = DeadCodeBlockTransformer(inject_dead_code_blocks)
 DEAD_CODE_REMOVAL_TRANSFORMER = DeadCodeRemovalTransformer(remove_dead_code)
 AST_REWRITE_TRANSFORMER = AstRewriteTransformer(collect_ast_replacements)
 RUNTIME_HELPER_TRANSFORMER = RuntimeHelperTransformer(inject_runtime_obfuscation_helpers)
+CONTROL_BODY_BRACING_TRANSFORMER = ControlBodyBracingTransformer(expand_inline_control_bodies)
 MEMORY_ACCESS_TRANSFORMER = MemoryAccessTransformer(inject_memory_access_helpers)
 STL_WRAPPER_TRANSFORMER = STLWrapperTransformer(inject_stl_wrappers)
 DEAD_CODE_HELPER_TRANSFORMER = DeadCodeHelperTransformer(inject_dead_code_helpers)
@@ -112,6 +115,7 @@ def obfuscate_file(target_file):
 
     working_content = strip_comments(original_content)
     working_content = DEAD_CODE_REMOVAL_TRANSFORMER.apply(working_content)
+    working_content = CONTROL_BODY_BRACING_TRANSFORMER.apply(working_content)
 
     def write_parse_target(source_text, existing_temp_path=None):
         parse_target_path = target_file
@@ -169,8 +173,9 @@ def obfuscate_file(target_file):
     ):
         original_tmp_flag = config.ENABLE_TMP_ADDITION_OBFUSCATION
         original_data_flow_flag = config.ENABLE_DATA_FLOW_OBFUSCATION
-        if vm_active:
+        if vm_active or config.ENABLE_TYPE_LEVEL_OBFUSCATION:
             config.ENABLE_TMP_ADDITION_OBFUSCATION = False
+        if vm_active:
             config.ENABLE_DATA_FLOW_OBFUSCATION = False
         try:
             AST_REWRITE_TRANSFORMER.collect(

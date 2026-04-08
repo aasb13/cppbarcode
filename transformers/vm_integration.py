@@ -1302,15 +1302,22 @@ def collect_virtual_machine_replacements(tu_cursor, target_realpath, name_map, s
 
     state.init_virtual_machine_names()
     converted = 0
+    converted_names = []
     for function_cursor in _walk_functions(tu_cursor, target_realpath):
         wrapper = _build_wrapper(function_cursor, source_text, name_map)
         if wrapper is None:
             continue
         replacements.append(wrapper)
         converted += 1
+        converted_names.append(function_cursor.spelling)
 
     state.VM_RUNTIME_REQUIRED = converted > 0
-    vlog("vm", f"converted_functions={converted}")
+    if len(converted_names) <= 10:
+        vlog("vm", f"converted_functions={converted}, names={converted_names}")
+    else:
+        shown = converted_names[:10]
+        truncated = len(converted_names) - 10
+        vlog("vm", f"converted_functions={converted}, names={shown}, truncated={truncated}")
 
 
 def inject_virtual_machine_runtime(source_text):
